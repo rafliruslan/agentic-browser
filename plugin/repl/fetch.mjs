@@ -23,6 +23,8 @@
  * but a policy that depends on the target site's headers is not a policy.
  */
 
+import { renderMarkdown, looksLikeHtml } from './markdown.mjs';
+
 const HTTP = new Set(['http:', 'https:']);
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -79,8 +81,17 @@ function clip(text, maxChars) {
   return `${s.slice(0, maxChars)}\n… truncated at ${maxChars} of ${s.length} chars`;
 }
 
-/** One response, rendered for the agent. */
-export function renderResponse(res, { maxChars = 12000 } = {}) {
+/**
+ * One response, rendered for the agent.
+ *
+ * An HTML body is converted to markdown rather than clipped as source. Raw
+ * HTML spends the whole budget on markup and then truncates mid-tag: measured
+ * on the Hacker News front page, 34KB of HTML is 5.6KB of markdown, and the
+ * page arrives whole instead of cut off a third of the way in. Anything that
+ * is not HTML - JSON above all, which is what most of these calls fetch - is
+ * passed through untouched, since it is already the shape the agent wants.
+ */
+export function renderResponse(res, { maxChars = 12000, markdown = true } = {}) {
   if (res?.error) return `fetch failed: ${res.error}`;
 
   const headers = res.headers || {};
@@ -88,7 +99,18 @@ export function renderResponse(res, { maxChars = 12000 } = {}) {
     .map((h) => `${h}: ${headers[h]}`)
     .join('\n');
 
-  return [`${res.status} ${res.statusText || ''}  ${res.url}`.replace(/\s+/g, ' ').trim(), shown, '', clip(res.body, maxChars)]
-    .filter((part, i) => part !== '' || i === 2)
+  const html = markdown && looksLikeHtml(headers['content-type'], res.body);
+  const body = html
+    ? renderMarkdown(res.body, { maxChars, baseUrl: res.url })
+    : clip(res.body, maxChars);
+
+  return [
+    `${res.status} ${res.statusText || ''}  ${res.url}`.replace(/\s+/g, ' ').trim(),
+    shown,
+    html ? '(html read as markdown; links are footnoted by index)' : '',
+    '',
+    body,
+  ]
+    .filter((part, i) => part !== '' || i === 3)
     .join('\n');
 }
