@@ -11,6 +11,10 @@
  * in it, and only messages in a followed thread are considered. Everything
  * else is dropped in `shouldHandle` before any work happens.
  *
+ * Set AGENT_MENTION_ONLY=0 to have her answer untagged replies in a followed
+ * thread. The default is that she does not: she reads the thread either way,
+ * and only a tag makes her speak.
+ *
  * Subscriptions expire. A thread nobody has touched for a day is finished, and
  * keeping it live means an offhand comment weeks later wakes the agent.
  */
@@ -101,8 +105,15 @@ export function createSubscriptionStore({
  * The mention case is deliberately excluded: Slack delivers a mention as BOTH
  * `app_mention` and `message.*`, so handling it here as well would run the
  * whole task twice and post two answers.
+ *
+ * `mentionOnly` turns off the follow-up path entirely, so she answers when
+ * tagged and not otherwise. It costs the "and the other one?" convenience this
+ * module was written for, and it buys a thread you can talk in without her
+ * taking every message as an instruction. Nothing about WATCHING changes:
+ * fetchThreadContext pastes the whole thread on the next turn, so everything
+ * said while she was quiet is still read when she is finally tagged.
  */
-export function shouldHandle(event, { botUserId, allowedUser, subscribed } = {}) {
+export function shouldHandle(event, { botUserId, allowedUser, subscribed, mentionOnly = false } = {}) {
   if (!event) return false;
 
   // Our own messages, and anything else posted by an app.
@@ -123,6 +134,10 @@ export function shouldHandle(event, { botUserId, allowedUser, subscribed } = {})
   if (botUserId && typeof event.text === 'string' && event.text.includes(`<@${botUserId}>`)) {
     return false;
   }
+
+  // Every remaining message is an untagged reply in a followed thread, which
+  // is exactly what this mode declines to answer.
+  if (mentionOnly) return false;
 
   return Boolean(subscribed);
 }

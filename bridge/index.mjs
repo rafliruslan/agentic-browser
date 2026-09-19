@@ -77,6 +77,16 @@ const MCP_CONFIG = process.env.AGENT_MCP_CONFIG || join(homedir(), '.config', 'b
  */
 let ALLOWED_TOOLS = BASE_TOOLS;
 
+/**
+ * Whether an untagged reply in a followed thread is an instruction.
+ *
+ * Off by default: talking in a thread she is in should not mean talking TO
+ * her. Interrupts are unaffected - `!stop` and `!steer` go through
+ * canInterrupt, which never wanted a tag, so stopping a run you are watching
+ * still needs no @.
+ */
+const MENTION_ONLY = process.env.AGENT_MENTION_ONLY !== '0';
+
 /** Threads run one at a time; this caps how many threads run together. */
 const DEFAULT_CONCURRENCY = 3;
 
@@ -222,9 +232,10 @@ async function main() {
 
   const subscriptions = createSubscriptionStore();
 
-  // A mention is a good way to start a conversation and a poor way to continue
-  // one. After the agent replies in a thread it follows that thread, so a plain
-  // reply is enough until the subscription expires or is stopped.
+  // She answers when tagged. She reads the thread either way: the next turn
+  // pastes the whole thread, so anything said while she was quiet is still in
+  // front of her when she is finally tagged. AGENT_MENTION_ONLY=0 restores the
+  // older behaviour, where a plain reply in a followed thread was enough.
   app.event('message', async ({ event, client }) => {
     if (!channelAllowed(ALLOWED_CHANNEL, event.channel)) return;
 
@@ -238,7 +249,7 @@ async function main() {
     }
 
     const subscribed = await subscriptions.isSubscribed(event.thread_ts);
-    if (!shouldHandle(event, { botUserId, allowedUser: ALLOWED_USER, subscribed })) return;
+    if (!shouldHandle(event, { botUserId, allowedUser: ALLOWED_USER, subscribed, mentionOnly: MENTION_ONLY })) return;
     if (isStopPhrase(event.text)) {
       await subscriptions.unsubscribe(event.thread_ts);
       await react(client, { channel: event.channel, ts: event.ts, name: 'wave', logger: console });

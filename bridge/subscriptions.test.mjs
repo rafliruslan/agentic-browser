@@ -184,3 +184,36 @@ test('an edit or a join is not an interrupt', () => {
     false,
   );
 });
+
+// --- answering only when tagged ---------------------------------------------
+
+test('an untagged reply in a followed thread is read, not answered', () => {
+  // She still receives it; shouldHandle only decides whether it is an
+  // instruction. The next turn pastes the whole thread, so it is not lost.
+  assert.equal(
+    shouldHandle(base(), { botUserId: BOT, allowedUser: OPERATOR, subscribed: true, mentionOnly: true }),
+    false,
+  );
+});
+
+test('mention-only does not loosen any other check', () => {
+  // Someone else, a bot, or a top-level message stays refused for its own
+  // reason rather than being let through by the new flag.
+  const opts = { botUserId: BOT, allowedUser: OPERATOR, subscribed: true, mentionOnly: false };
+  assert.equal(shouldHandle(base({ user: 'USOMEONE' }), opts), false);
+  assert.equal(shouldHandle(base({ bot_id: 'B1' }), opts), false);
+  assert.equal(shouldHandle(base({ thread_ts: undefined }), opts), false);
+});
+
+test('turning mention-only off restores the follow-up reply', () => {
+  assert.equal(
+    shouldHandle(base(), { botUserId: BOT, allowedUser: OPERATOR, subscribed: true, mentionOnly: false }),
+    true,
+  );
+});
+
+test('stopping a live run still needs no tag', () => {
+  // canInterrupt is the path !stop and !steer take, and it never asked for a
+  // mention. Mention-only must not quietly disarm it.
+  assert.equal(canInterrupt(base({ text: '!stop' }), { botUserId: BOT, allowedUser: OPERATOR }), true);
+});
