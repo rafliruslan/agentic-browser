@@ -248,7 +248,11 @@ async function main() {
       return;
     }
 
-    const subscribed = await subscriptions.isSubscribed(event.thread_ts);
+    // Not read at all when only a mention speaks to her, so it is not looked
+    // up: this runs on every message in every channel the bot is in, and a
+    // disk read per message to compute a value nobody uses is the kind of cost
+    // that only shows up in a busy workspace.
+    const subscribed = MENTION_ONLY ? false : await subscriptions.isSubscribed(event.thread_ts);
     if (!shouldHandle(event, { botUserId, allowedUser: ALLOWED_USER, subscribed, mentionOnly: MENTION_ONLY })) return;
     if (isStopPhrase(event.text)) {
       await subscriptions.unsubscribe(event.thread_ts);
@@ -481,7 +485,10 @@ async function main() {
         });
         ok = !/^(❌|⏱|🌐|⚠️)/.test(body);
         // Follow the thread so the next turn needs no mention.
-        if (ok) await subscriptions.subscribe(threadTs, { channel });
+        // Only worth recording when a follow-up could act on it. Under
+        // mention-only nothing reads the store, so writing it every reply just
+        // grows a file that is never opened.
+        if (ok && !MENTION_ONLY) await subscriptions.subscribe(threadTs, { channel });
       } catch (err) {
         console.error('[agent] run failed:', err);
         try {

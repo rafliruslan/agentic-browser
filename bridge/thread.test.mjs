@@ -89,3 +89,67 @@ test('composeTask carries both the prompt and the transcript', () => {
   assert.match(out, /do it/);
   assert.match(out, /earlier/);
 });
+
+// --- keeping the recent end of a long thread --------------------------------
+
+import { recentReplies } from './thread.mjs';
+
+/** A fake Slack that pages a thread the way conversations.replies does. */
+function fakeSlack(messages, pageSize = 200) {
+  const calls = [];
+  return {
+    calls,
+    conversations: {
+      async replies({ cursor }) {
+        const start = cursor ? Number(cursor) : 0;
+        calls.push(start);
+        const slice = messages.slice(start, start + pageSize);
+        const next = start + pageSize;
+        return {
+          messages: slice,
+          has_more: next < messages.length,
+          response_metadata: next < messages.length ? { next_cursor: String(next) } : {},
+        };
+      },
+    },
+  };
+}
+
+const msgs = (n) => Array.from({ length: n }, (_, i) => ({ ts: `${i}`, text: `m${i}` }));
+
+test('a short thread comes back whole, in order', async () => {
+  const got = await recentReplies(fakeSlack(msgs(5)), { channel: 'C', threadTs: '0', limit: 30 });
+  assert.deepEqual(got.map((m) => m.text), ['m0', 'm1', 'm2', 'm3', 'm4']);
+});
+
+test('a long thread keeps the END, not the beginning', async () => {
+  // Slack returns a thread oldest first, so asking for 30 used to return the
+  // first 30 and lose the conversation that decides what she is being asked.
+  const got = await recentReplies(fakeSlack(msgs(100)), { channel: 'C', threadTs: '0', limit: 5 });
+  assert.equal(got.at(-1).text, 'm99');
+  assert.equal(got.length, 5);
+});
+
+test('the parent survives the trim, since it is what the thread is about', async () => {
+  const got = await recentReplies(fakeSlack(msgs(100)), { channel: 'C', threadTs: '0', limit: 5 });
+  assert.equal(got[0].text, 'm0');
+  assert.equal(got.filter((m) => m.ts === '0').length, 1, 'and is not duplicated');
+});
+
+test('the parent is not duplicated when the thread never needed trimming', async () => {
+  const got = await recentReplies(fakeSlack(msgs(3)), { channel: 'C', threadTs: '0', limit: 30 });
+  assert.equal(got.filter((m) => m.ts === '0').length, 1);
+  assert.deepEqual(got.map((m) => m.text), ['m0', 'm1', 'm2']);
+});
+
+test('paging stops at maxPages rather than walking a huge thread forever', async () => {
+  const slack = fakeSlack(msgs(10000), 200);
+  await recentReplies(slack, { channel: 'C', threadTs: '0', limit: 30, maxPages: 3 });
+  assert.equal(slack.calls.length, 3);
+});
+
+test('one page is one call: the common case costs nothing extra', async () => {
+  const slack = fakeSlack(msgs(10));
+  await recentReplies(slack, { channel: 'C', threadTs: '0' });
+  assert.equal(slack.calls.length, 1);
+});

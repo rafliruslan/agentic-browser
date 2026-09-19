@@ -7,7 +7,13 @@
  * the thread transcript closes that gap.
  */
 
-/** Messages fetched per thread. Enough for real context, bounded for tokens. */
+/**
+ * Messages kept per thread. Enough for real context, bounded for tokens.
+ *
+ * These are the most recent, not the first. She only speaks when tagged now,
+ * so a thread can run a long way between mentions and the opening messages are
+ * the ones worth losing.
+ */
 export const THREAD_LIMIT = 30;
 
 /** Per-message character cap, so one pasted wall of text cannot dominate. */
@@ -71,6 +77,50 @@ export function formatThread(messages, botUserId, skipTs, allowedUser) {
 }
 
 /**
+ * Every message in a thread, or the most recent `limit` of them.
+ *
+ * Slack returns a thread oldest first, so asking for 30 gives the FIRST 30 and
+ * the recent conversation is the part that goes missing. That is backwards for
+ * context: what was said in the last few minutes decides what she is being
+ * asked, and the opening of a long thread rarely does.
+ *
+ * So it pages forward and keeps a rolling tail. The parent is kept whatever
+ * happens, because it is what the thread is ABOUT and dropping it leaves a
+ * transcript that starts mid-argument.
+ *
+ * `maxPages` bounds the cost. A thread longer than that loses its middle, not
+ * its end, which is the right thing to lose.
+ */
+export async function recentReplies(client, { channel, threadTs, limit = THREAD_LIMIT, maxPages = 10 }) {
+  let cursor;
+  let parent = null;
+  let tail = [];
+
+  for (let page = 0; page < maxPages; page++) {
+    const res = await client.conversations.replies({
+      channel,
+      ts: threadTs,
+      limit: 200,
+      ...(cursor ? { cursor } : {}),
+    });
+    const batch = res?.messages || [];
+    if (parent === null && batch.length) parent = batch[0];
+    tail.push(...batch);
+    if (tail.length > limit) tail = tail.slice(-limit);
+
+    cursor = res?.response_metadata?.next_cursor;
+    if (!res?.has_more || !cursor) break;
+  }
+
+  // The parent survives the trim, and is not duplicated when it is already in
+  // the tail (a short thread, where nothing was dropped at all).
+  if (parent && !tail.some((m) => m && m.ts === parent.ts)) {
+    return [parent, ...tail.slice(1)];
+  }
+  return tail;
+}
+
+/**
  * Fetch and format the thread a mention arrived in. Returns '' when there is
  * no thread, nothing worth quoting, or Slack refuses (a missing history scope
  * should degrade context, never break the run).
@@ -78,12 +128,8 @@ export function formatThread(messages, botUserId, skipTs, allowedUser) {
 export async function fetchThreadContext(client, { channel, threadTs, botUserId, skipTs, allowedUser }) {
   if (!threadTs) return '';
   try {
-    const res = await client.conversations.replies({
-      channel,
-      ts: threadTs,
-      limit: THREAD_LIMIT,
-    });
-    return formatThread(res.messages, botUserId, skipTs, allowedUser);
+    const messages = await recentReplies(client, { channel, threadTs });
+    return formatThread(messages, botUserId, skipTs, allowedUser);
   } catch {
     return '';
   }
