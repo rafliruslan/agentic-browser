@@ -101,3 +101,42 @@ export async function browserCdpUrl(path, { read = readFile } = {}) {
     return null;
   }
 }
+
+/**
+ * Tool names that run arbitrary script, whatever the browser is called.
+ *
+ * These were denied by their literal names, `mcp__brave__browser_run_code_unsafe`
+ * and `mcp__devtools__evaluate_script`. That held exactly as long as the server
+ * was called `brave`: point the same Playwright MCP at Chromium under the key
+ * `chromium` and the tool becomes `mcp__chromium__browser_run_code_unsafe`,
+ * which no longer matches, and a door shut deliberately reopens without a word.
+ *
+ * So the names are derived from the config instead of written down. Every
+ * configured server contributes its own spelling of both, and the two historical
+ * literals are kept whether or not those servers exist: a machine whose config
+ * this cannot read must not end up with a shorter denylist than before.
+ */
+export const UNSAFE_SUFFIXES = ['browser_run_code_unsafe', 'evaluate_script'];
+
+const LEGACY_DENIED = ['mcp__brave__browser_run_code_unsafe', 'mcp__devtools__evaluate_script'];
+
+export function unsafeTools(config) {
+  const names = new Set(LEGACY_DENIED);
+  const servers = config?.mcpServers;
+  if (servers && typeof servers === 'object') {
+    for (const server of Object.keys(servers)) {
+      for (const suffix of UNSAFE_SUFFIXES) names.add(`mcp__${server}__${suffix}`);
+    }
+  }
+  return [...names];
+}
+
+/** Read the config and list every arbitrary-script tool it could expose. */
+export async function deniedBrowserTools(path, { read = readFile } = {}) {
+  try {
+    return unsafeTools(JSON.parse(await read(path, 'utf8')));
+  } catch {
+    // An unreadable config must not shorten the denylist.
+    return [...LEGACY_DENIED];
+  }
+}

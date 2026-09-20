@@ -133,3 +133,44 @@ test('the shipped configs disagree about CDP, which is the point', async () => {
 test('browserCdpUrl treats an unreadable config as no CDP', async () => {
   assert.equal(await browserCdpUrl('/nope/mcp.json'), null);
 });
+
+// --- denying arbitrary script whatever the browser is called ----------------
+
+import { unsafeTools, UNSAFE_SUFFIXES } from './browser.mjs';
+
+test('a renamed browser server still has its script tools denied', () => {
+  // The whole point. Denying the literal mcp__brave__* names held only while
+  // the server was called brave; pointing the same Playwright MCP at Chromium
+  // under another key reopened a door that was shut deliberately.
+  const got = unsafeTools({ mcpServers: { chromium: { args: ['--cdp-endpoint', 'http://x'] } } });
+  assert.ok(got.includes('mcp__chromium__browser_run_code_unsafe'));
+  assert.ok(got.includes('mcp__chromium__evaluate_script'));
+});
+
+test('the historical names are kept even when those servers are absent', () => {
+  // A machine whose config we cannot read must not end up with a shorter
+  // denylist than it had before.
+  const got = unsafeTools({ mcpServers: { chromium: {} } });
+  assert.ok(got.includes('mcp__brave__browser_run_code_unsafe'));
+  assert.ok(got.includes('mcp__devtools__evaluate_script'));
+});
+
+test('every configured server contributes its own spelling', () => {
+  const got = unsafeTools({ mcpServers: { a: {}, b: {} } });
+  for (const s of UNSAFE_SUFFIXES) {
+    assert.ok(got.includes(`mcp__a__${s}`), `a/${s}`);
+    assert.ok(got.includes(`mcp__b__${s}`), `b/${s}`);
+  }
+});
+
+test('a junk config still denies the historical names', () => {
+  for (const cfg of [null, {}, { mcpServers: 'nope' }]) {
+    const got = unsafeTools(cfg);
+    assert.ok(got.includes('mcp__brave__browser_run_code_unsafe'));
+  }
+});
+
+test('no duplicates when the server really is called brave', () => {
+  const got = unsafeTools({ mcpServers: { brave: {} } });
+  assert.equal(got.filter((t) => t === 'mcp__brave__browser_run_code_unsafe').length, 1);
+});

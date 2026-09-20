@@ -1,6 +1,6 @@
 ---
 name: brave-agent
-description: Drive the user's real, logged-in Brave browser on Linux. Use whenever a task means visiting a site the user is signed in to (Gmail, Calendar, Slack, Linear, Shopify, a dashboard, an admin panel), or reading, clicking, filling or screenshotting any web page. Also use when a browser action fails and you need to know why.
+description: Drive the user's real, logged-in Chromium browser (Chromium, Chrome, Brave, Edge). Use whenever a task means visiting a site the user is signed in to (Gmail, Calendar, Slack, Linear, Shopify, a dashboard, an admin panel), or reading, clicking, filling or screenshotting any web page. Also use when a browser action fails and you need to know why.
 ---
 
 # Driving the user's real Brave

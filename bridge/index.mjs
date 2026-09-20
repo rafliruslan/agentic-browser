@@ -29,7 +29,7 @@ import { pickModel, stripDirective } from './router.mjs';
 import { acquire, release } from './lock.mjs';
 import { react, settle, setStatus, WORKING } from './status.mjs';
 import { createSubscriptionStore, shouldHandle, isStopPhrase, canInterrupt } from './subscriptions.mjs';
-import { allowedTools, browserCdpUrl, BASE_TOOLS } from './browser.mjs';
+import { allowedTools, browserCdpUrl, deniedBrowserTools, BASE_TOOLS } from './browser.mjs';
 import { parseInterrupt } from './interrupt.mjs';
 import { createRunRegistry } from './runs.mjs';
 
@@ -76,6 +76,13 @@ const MCP_CONFIG = process.env.AGENT_MCP_CONFIG || join(homedir(), '.config', 'b
  * safety note on DENIED_TOOLS in runner.mjs.
  */
 let ALLOWED_TOOLS = BASE_TOOLS;
+
+/**
+ * Arbitrary-script tools, named for whatever this machine calls its browser.
+ * Derived at startup rather than written down, so renaming the server cannot
+ * quietly unblock them.
+ */
+let DENIED = [];
 
 /**
  * Whether an untagged reply in a followed thread is an instruction.
@@ -174,6 +181,7 @@ async function main() {
   // Which browser is attached, read once. A warning rather than a throw: losing
   // the browser should not cost you the channel you would use to ask about it.
   ALLOWED_TOOLS = await allowedTools(MCP_CONFIG);
+  DENIED = await deniedBrowserTools(MCP_CONFIG);
   const browsers = ALLOWED_TOOLS.filter((t) => t.startsWith('mcp__'));
   // Only a CDP browser can be preflighted, and only a CDP browser wedges the
   // way the preflight looks for. Null here means the check is skipped rather
@@ -415,6 +423,7 @@ async function main() {
           effort: route.effort,
           mcpConfig: MCP_CONFIG,
           allowedTools: ALLOWED_TOOLS,
+          deniedTools: DENIED,
           transcriptPath: transcriptPathFor(WORKSPACE, sessionId),
           onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts }),
         });
@@ -433,6 +442,7 @@ async function main() {
             effort: route.effort,
             mcpConfig: MCP_CONFIG,
             allowedTools: ALLOWED_TOOLS,
+            deniedTools: DENIED,
             transcriptPath: transcriptPathFor(WORKSPACE, sessionId),
             onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts }),
           });
@@ -453,6 +463,7 @@ async function main() {
             effort: route.effort,
             mcpConfig: MCP_CONFIG,
             allowedTools: ALLOWED_TOOLS,
+            deniedTools: DENIED,
             transcriptPath: transcriptPathFor(WORKSPACE, freshId),
             onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts }),
           });

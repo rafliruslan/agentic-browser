@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Slack Socket Mode bridge: mention an agent, it drives your real Brave via Claude Code",
+  "description": "Slack Socket Mode bridge: mention an agent, it drives your real browser via Claude Code",
   "main": "index.mjs",
   "scripts": {
     "start": "node index.mjs",

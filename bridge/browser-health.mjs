@@ -27,7 +27,11 @@
  * and the one that was blocking is gone.
  */
 
-const DEFAULT_CDP_URL = process.env.BRAVE_CDP_URL || 'http://127.0.0.1:9222';
+// BRAVE_CDP_URL still works, the same bargain observe.mjs struck with
+// BRAVE_HISTORY_DB: it was the name before the agent drove anything but Brave,
+// and silently ignoring an already-configured machine is the worse trade.
+const DEFAULT_CDP_URL =
+  process.env.AGENT_CDP_URL || process.env.BRAVE_CDP_URL || 'http://127.0.0.1:9222';
 
 /** Per target. Generous: a busy page can be slow without being wedged. */
 const PROBE_TIMEOUT_MS = 3000;

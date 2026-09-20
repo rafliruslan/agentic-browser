@@ -113,10 +113,10 @@ test('formatResult detects a browser that is not reachable', () => {
     timedOut: false,
     sessionId: null,
   });
-  assert.match(out, /Brave isn't running/);
+  assert.match(out, /browser isn't running/);
 });
 
-// Every CDP failure string must reach the "open Brave" message, not the
+// Every CDP failure string must reach the "open the browser" message, not the
 // generic one. A hint that stops matching is silent: the run still fails, the
 // user just stops being told what to do about it.
 test('every CDP hint produces the browser message', () => {
@@ -132,7 +132,7 @@ test('every CDP hint produces the browser message', () => {
   ];
   for (const hint of hints) {
     const out = formatResult({ ok: false, output: '', error: hint, timedOut: false, sessionId: null });
-    assert.match(out, /Brave isn't running/, `hint did not match: ${hint}`);
+    assert.match(out, /browser isn't running/, `hint did not match: ${hint}`);
   }
 });
 
@@ -146,7 +146,7 @@ test('the retired Aside strings are gone', () => {
     timedOut: false,
     sessionId: null,
   });
-  assert.ok(!/Brave isn't running/.test(out), 'stale Aside hint is still matching');
+  assert.ok(!/browser isn't running/.test(out), 'stale Aside hint is still matching');
 });
 
 test('formatResult reports a generic failure with the stderr text', () => {

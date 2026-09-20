@@ -33,8 +33,13 @@ import { pickNote, renderNote } from './siteskill.mjs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-const CDP = process.env.BRAVE_CDP_ENDPOINT || 'http://127.0.0.1:9222';
-const CONNECT_TIMEOUT_MS = Number(process.env.BRAVE_CDP_TIMEOUT_MS) || 120_000;
+// Any Chromium exposing a CDP port: Chromium, Chrome, Brave, Edge. Nothing
+// here is Brave-specific. The BRAVE_ names still work so an already-configured
+// machine keeps running.
+const CDP =
+  process.env.AGENT_CDP_ENDPOINT || process.env.BRAVE_CDP_ENDPOINT || 'http://127.0.0.1:9222';
+const CONNECT_TIMEOUT_MS =
+  Number(process.env.AGENT_CDP_TIMEOUT_MS || process.env.BRAVE_CDP_TIMEOUT_MS) || 120_000;
 
 /**
  * Where the hand-written site notes live. Same resolution as the memory

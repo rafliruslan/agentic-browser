@@ -34,7 +34,7 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { runAgent } from './runner.mjs';
 import { transcriptPathFor } from './mirror.mjs';
-import { allowedTools } from './browser.mjs';
+import { allowedTools, deniedBrowserTools } from './browser.mjs';
 import { healBrowser } from './browser-health.mjs';
 
 const WORKSPACE =
@@ -53,11 +53,11 @@ const MCP_CONFIG =
  * so a routine drives whichever browser this machine has. See browser.mjs.
  */
 const ROUTINE_BASE = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash'];
-const DENIED_TOOLS = [
-  'Task',
-  'mcp__brave__browser_run_code_unsafe',
-  'mcp__devtools__evaluate_script',
-];
+
+// The arbitrary-script tools come from deniedBrowserTools, named for whatever
+// this machine calls its browser. `Task` is not listed here because runner.mjs
+// unions its own list into every call and that is where it lives; duplicating
+// it invites the two copies to drift.
 
 /** Routines are long: a browser task plus a report. */
 const TIMEOUT_MS = 15 * 60 * 1000;
@@ -281,7 +281,7 @@ async function main() {
       effort: meta.effort || 'xhigh',
       mcpConfig: MCP_CONFIG,
       allowedTools: await allowedTools(MCP_CONFIG, { base: ROUTINE_BASE }),
-      deniedTools: DENIED_TOOLS,
+      deniedTools: await deniedBrowserTools(MCP_CONFIG),
       timeoutMs: TIMEOUT_MS,
       transcriptPath: transcriptPathFor(WORKSPACE, sessionId),
     });

@@ -189,7 +189,7 @@ export function formatResult(result) {
   if (!result.ok) {
     const blob = `${result.error} ${result.output}`.toLowerCase();
     if (NOT_RUNNING_HINTS.some((hint) => blob.includes(hint))) {
-      return "Brave isn't running, so there is no browser to work in. Open it and ask again.";
+      return "The browser isn't running, so there is nothing to work in. Open it and ask again.";
     }
     if (NETWORK_HINTS.some((hint) => blob.includes(hint))) {
       return '🌐 Lost the network mid-run, so that one died before it finished. Ask me again.';

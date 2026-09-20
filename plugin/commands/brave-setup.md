@@ -1,38 +1,59 @@
 ---
-description: Configure Brave on Linux or macOS so Claude Code can drive the user's real logged-in profile over CDP
+description: Configure a Chromium browser (Chromium, Chrome, Brave, Edge) on Linux or macOS so Claude Code can drive the user's real logged-in profile over CDP
 argument-hint: "[--revert]"
 ---
 
-Set up (or undo) agentic control of the user's real Brave browser.
+Set up (or undo) agentic control of the user's real browser.
+
+Any Chromium will do: Chromium, Chrome, Brave, Edge. Nothing downstream is
+Brave-specific - the repl server talks CDP, and `browser.mjs` finds the browser
+by the `--cdp-endpoint`/`--browserUrl` flag in the MCP config rather than by
+name. Ask which browser holds the logins that matter before choosing.
+
+**Chromium is the better target where there is a choice.** Brave's Shields
+rewrite the page, so the accessibility tree the agent snapshots is not the one
+the site served, and its fingerprint randomisation makes each session look
+different, which is the opposite of what a stable logged-in user looks like.
+Chromium is also what CDP and Playwright are developed against.
 
 If the argument is `--revert`, skip to **Reverting** at the end.
 
 Work through this in order. Report what you find at each step rather than
 assuming the defaults hold.
 
-The shape is the same on both platforms: find the profile, move it off the
-default path, launch with `--remote-debugging-port`, verify. Only the paths and
-the launcher differ, and each step says where.
+The shape is the same everywhere: find the profile, move it off the default
+path, launch with `--remote-debugging-port`, verify. Only the paths and the
+launcher differ, and each step says where.
 
 | | Linux | macOS |
 |---|---|---|
-| binary | `brave` (Arch) / `brave-browser` (Debian) | `/Applications/Brave Browser.app/Contents/MacOS/Brave Browser` |
-| user data | `~/.config/BraveSoftware/Brave-Browser` | `~/Library/Application Support/BraveSoftware/Brave-Browser` |
-| flags | `~/.config/brave-flags.conf`, read by every launcher | no flags file; the launcher must pass them |
+| binary | `chromium` / `google-chrome` / `brave` (Arch) / `brave-browser` (Debian) | `/Applications/<Browser>.app/Contents/MacOS/<Browser>` |
+| user data | `~/.config/chromium`, `~/.config/google-chrome`, `~/.config/BraveSoftware/Brave-Browser` | `~/Library/Application Support/<Chromium\|Google/Chrome\|BraveSoftware/Brave-Browser>` |
+| flags | `~/.config/<browser>-flags.conf`, read by every launcher | no flags file; the launcher must pass them |
 | service | systemd user units | launchd agents |
+
+**macOS runs one instance per app bundle.** If that browser is already running
+without the debug flag, a second launch does not start a browser - it hands its
+command line to the running one and exits, leaving no port and no
+`DevToolsActivePort` file. Seen on this machine: four flag combinations all
+failed until every instance was quit. Linux keys the singleton to
+`--user-data-dir`, so a second profile just starts. Check `pgrep` before
+concluding the flags are wrong.
 
 ## 1. Establish the facts first
 
 ```bash
-# Linux
-brave --version 2>/dev/null || brave-browser --version
-ls -d ~/.config/BraveSoftware/Brave-Browser 2>/dev/null
-pgrep -a brave | head -3
+# Linux: whichever is installed
+for b in chromium google-chrome brave brave-browser microsoft-edge; do
+  command -v "$b" >/dev/null && echo "$b -> $("$b" --version 2>/dev/null)"
+done
+ls -d ~/.config/chromium ~/.config/google-chrome ~/.config/BraveSoftware/Brave-Browser 2>/dev/null
+pgrep -a 'chromium|chrome|brave' | head -3
 
 # macOS
-"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" --version
-ls -d ~/Library/Application\ Support/BraveSoftware/Brave-Browser 2>/dev/null
-pgrep -a "Brave Browser" | head -3
+ls -d /Applications/*.app | grep -iE 'chromium|chrome|brave|edge'
+ls -d ~/Library/Application\ Support/{Chromium,Google/Chrome,BraveSoftware/Brave-Browser} 2>/dev/null
+pgrep -a -f 'Chromium|Google Chrome|Brave Browser' | head -3
 ```
 
 You need four things: the binary, the architecture (`uname -m`), whether a
