@@ -24,6 +24,7 @@ import { parseMention, formatResult } from './text.mjs';
 import { buildBlocks } from './blocks.mjs';
 import { runAgent } from './runner.mjs';
 import { transcriptPathFor } from './mirror.mjs';
+import { readIdentity, identityNote } from './identity.mjs';
 import { healBrowser } from './browser-health.mjs';
 import { pickModel, stripDirective } from './router.mjs';
 import { acquire, release } from './lock.mjs';
@@ -83,6 +84,20 @@ let ALLOWED_TOOLS = BASE_TOOLS;
  * quietly unblock them.
  */
 let DENIED = [];
+
+/**
+ * Which browser profile the agent drives, when that is knowable.
+ *
+ * Read once at startup: a profile does not change under a running browser, and
+ * doing it per turn would read the same file on every message. Null when the
+ * browser has no user-data-dir to read, which is the normal case for one
+ * driven through its own process.
+ */
+let IDENTITY = null;
+
+/** Where the browser keeps its profiles, and which one the launcher pinned. */
+const BROWSER_DATA_DIR = process.env.AGENT_BROWSER_DATA_DIR || null;
+const BROWSER_PROFILE_DIR = process.env.AGENT_BROWSER_PROFILE_DIR || null;
 
 /**
  * Whether an untagged reply in a followed thread is an instruction.
@@ -182,6 +197,20 @@ async function main() {
   // the browser should not cost you the channel you would use to ask about it.
   ALLOWED_TOOLS = await allowedTools(MCP_CONFIG);
   DENIED = await deniedBrowserTools(MCP_CONFIG);
+
+  IDENTITY = await readIdentity({
+    userDataDir: BROWSER_DATA_DIR,
+    profileDir: BROWSER_PROFILE_DIR,
+  });
+  if (IDENTITY) {
+    console.log(`[browser] driving profile ${IDENTITY.description}`);
+    // Worth a line of its own. The failure it prevents is silent: the agent
+    // reads an inbox as the wrong person, finds nothing, and reports nothing
+    // wrong.
+    if (IDENTITY.mismatch) {
+      console.log(`[browser] NOTE: he is probably in ${IDENTITY.mismatch.humanLikelyIn}, not ${IDENTITY.mismatch.driving}`);
+    }
+  }
   const browsers = ALLOWED_TOOLS.filter((t) => t.startsWith('mcp__'));
   // Only a CDP browser can be preflighted, and only a CDP browser wedges the
   // way the preflight looks for. Null here means the check is skipped rather
@@ -376,7 +405,11 @@ async function main() {
         const isNew = !existing;
 
         const task = composeTask(prompt, threadContext);
-        const note = locationNote({ channel, threadTs });
+        // Who she is browsing as, before what she is being asked. An empty
+        // string when unknown, so nothing is claimed that is not known.
+        const note = [identityNote(IDENTITY), locationNote({ channel, threadTs })]
+          .filter(Boolean)
+          .join('\n\n');
         // Persona on a thread's first turn only. After that it lives in the
         // session history, and repeating it makes her restate herself.
         const full = [isNew ? PERSONA : '', task, '\n\n---\n\n', note]
