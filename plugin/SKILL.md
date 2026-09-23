@@ -1,5 +1,5 @@
 ---
-name: brave-agent
+name: agentic-browser
 description: Drive the user's real, logged-in Chromium browser (Chromium, Chrome, Brave, Edge). Use whenever a task means visiting a site the user is signed in to (Gmail, Calendar, Slack, Linear, Shopify, a dashboard, an admin panel), or reading, clicking, filling or screenshotting any web page. Also use when a browser action fails and you need to know why.
 ---
 
@@ -12,7 +12,7 @@ nothing needs OAuth and **everything you do is done as them**.
 If CDP is unreachable, Brave is not running or was not launched with the debug
 flags. Say so. Do not silently fall back to a different browser, and do not
 launch a clean one: a fresh profile is signed in to nothing, which makes it
-useless for the tasks this exists for. Run `/brave-setup` to configure it.
+useless for the tasks this exists for. Run `/browser-setup` to configure it.
 
 ## The browser is the integration
 
@@ -21,16 +21,16 @@ authenticated in the browser; an API tool needs its own credentials, its own
 scopes, and usually is not connected. First move on any task naming a service:
 
 ```
-mcp__brave__browser_tabs (action: list)     -- it is often already open
+mcp__browser__browser_tabs (action: list)     -- it is often already open
 ```
 
 ## Reading: snapshot, not screenshot
 
-`mcp__brave__browser_snapshot` returns an accessibility tree with stable
+`mcp__browser__browser_snapshot` returns an accessibility tree with stable
 `[ref=eNN]` ids. A few KB against a screenshot's hundreds, no vision needed, and
 refs survive re-renders far better than CSS selectors on modern SPA markup.
 
-`mcp__brave__browser_find` searches that tree and returns only matching nodes
+`mcp__browser__browser_find` searches that tree and returns only matching nodes
 with their refs. Use it to locate one element instead of capturing a whole page.
 
 Screenshot when the question is genuinely about pixels (spacing, alignment,

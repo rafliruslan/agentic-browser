@@ -1,4 +1,4 @@
-# Rename: brave-agent → agentic-browser
+# Rename: agentic-browser → agentic-browser
 
 The code stopped being Brave-specific in `ccbe7da`. The name has not caught up.
 This is the plan for doing that, written before doing any of it, because most
@@ -23,12 +23,12 @@ has never existed. **Rename by token, never by substring.**
 
 | From | To | Count |
 |---|---|---|
-| `brave-agent` | `agentic-browser` | 85 |
-| `mcp__brave` | `mcp__browser` | 40 |
-| `brave-repl` | `browser-repl` | 19 |
-| `com.brave-agent` | `com.agentic-browser` | 15 |
-| `brave-profile` | `browser-profile` | 13 |
-| `brave-setup` | `browser-setup` | 5 |
+| `agentic-browser` | `agentic-browser` | 85 |
+| `mcp__browser` | `mcp__browser` | 40 |
+| `browser-repl` | `browser-repl` | 19 |
+| `com.agentic-browser` | `com.agentic-browser` | 15 |
+| `browser-profile` | `browser-profile` | 13 |
+| `browser-setup` | `browser-setup` | 5 |
 
 `BRAVE_CDP_ENDPOINT`, `BRAVE_CDP_URL`, `BRAVE_CDP_TIMEOUT_MS` and
 `BRAVE_HISTORY_DB` are already aliases for `AGENT_*` names and keep working.
@@ -43,18 +43,18 @@ while the old names still work, so nothing is ever half-migrated.
 1. **Nothing is running.** `launchctl bootout` all three agents (or `systemctl
    --user stop` on Linux). A plist rename with the job loaded leaves a ghost.
 2. **Move the state directories**, keeping the contents:
-   - `~/.config/brave-agent/` → `~/.config/agentic-browser/` (env, mcp.json, persona.md)
-   - `~/.local/state/brave-agent/` → `~/.local/state/agentic-browser/` (lock, pending.json, subscriptions.json, threads.json)
-   - `~/.local/share/brave-profile/` → leave it. It is a browser profile, not
+   - `~/.config/agentic-browser/` → `~/.config/agentic-browser/` (env, mcp.json, persona.md)
+   - `~/.local/state/agentic-browser/` → `~/.local/state/agentic-browser/` (lock, pending.json, subscriptions.json, threads.json)
+   - `~/.local/share/browser-profile/` → leave it. It is a browser profile, not
      project state, and moving it invalidates every logged-in session in it.
      Rename it only with the browser shut and nothing else to do that day.
 3. **Rewrite the three launchd plists** under new labels, repointing
    `AGENT_MCP_CONFIG`, `AGENT_ENV_PATH`, log paths and `WorkingDirectory`.
    Bootstrap the new labels, then delete the old files. Log paths change:
-   `~/Library/Logs/brave-agent.{stdout,stderr}.log` and
-   `brave-agent-routines.log`.
+   `~/Library/Logs/agentic-browser.{stdout,stderr}.log` and
+   `agentic-browser-routines.log`.
 4. **The repo and the tokens** - `scripts/rename.sh` below.
-5. **GitHub**: rename `rafliruslan/brave-agent` → `rafliruslan/agentic-browser`.
+5. **GitHub**: rename `rafliruslan/agentic-browser` → `rafliruslan/agentic-browser`.
    GitHub redirects the old URL, so existing clones keep fetching, but the
    marketplace entry and the README clone line should both be updated rather
    than relying on the redirect.
@@ -62,7 +62,7 @@ while the old names still work, so nothing is ever half-migrated.
    The old plugin must be removed first or both register and the tool names
    collide.
 7. **The workspace**, which is a different repo: `hammock-memory` has skills
-   naming `mcp__brave__*`. They break the moment the server key changes, and
+   naming `mcp__browser__*`. They break the moment the server key changes, and
    they are what `visual-fallback` and `google-calendar` depend on.
 
 ## The part that is not mechanical
@@ -73,7 +73,7 @@ agent sees. Three consequences:
 - **The denylist already follows the config** as of `ccbe7da`, so arbitrary
   script stays blocked under the new name without anything being edited. This
   was the one real hazard and it is already handled.
-- **Two workspace skills** reference `mcp__brave__*` by name and must be edited
+- **Two workspace skills** reference `mcp__browser__*` by name and must be edited
   in the same change, or the agent is told to call tools that no longer exist.
 - **Session transcripts already written** name the old tools. They are history
   and stay as they are; nothing reads them for tool names.
@@ -82,7 +82,7 @@ agent sees. Three consequences:
 
 ```bash
 # No project-name tokens left
-git grep -nE 'brave-agent|mcp__brave|brave-repl|com\.brave-agent|brave-profile'
+git grep -nE 'agentic-browser|mcp__browser|browser-repl|com\.agentic-browser|browser-profile'
 
 # The browser references survived
 git grep -cE 'BraveSoftware|Brave-Browser|brave-flags|brave-browser'   # expect 31

@@ -23,7 +23,7 @@ import { homedir } from 'node:os';
  */
 
 export const PERSONA_PATH =
-  process.env.AGENT_PERSONA_PATH || join(homedir(), '.config', 'brave-agent', 'persona.md');
+  process.env.AGENT_PERSONA_PATH || join(homedir(), '.config', 'agentic-browser', 'persona.md');
 
 /**
  * Used when no persona file exists. Deliberately plain: a character is a

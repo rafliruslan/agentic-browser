@@ -8,7 +8,7 @@
  * resolvable afterwards by `page.locator('[data-bref="e42"]')`, no internals,
  * no version coupling, and the tag survives until the next snapshot.
  *
- * Refs are ours alone. `mcp__brave__*` emits `[ref=e12]` and `mcp__devtools__*`
+ * Refs are ours alone. `mcp__browser__*` emits `[ref=e12]` and `mcp__devtools__*`
  * emits `uid=1_21`; neither is interchangeable with these. Snapshot with the
  * server you are about to act with.
  */

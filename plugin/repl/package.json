@@ -1,5 +1,5 @@
 {
-  "name": "brave-repl-mcp",
+  "name": "browser-repl-mcp",
   "version": "0.1.0",
   "private": true,
   "type": "module",

@@ -1,4 +1,4 @@
-# brave-agent
+# agentic-browser
 
 Tag it in Slack, it works in the browser you are already signed in to. Runs on
 Linux and macOS, billed to a Claude subscription rather than per token.
@@ -31,7 +31,7 @@ Slack (Socket Mode)
 
 | | |
 |---|---|
-| **`plugin/`** | A Claude Code plugin: four MCP servers on one running Brave, plus the browser skills and `/brave-setup`. Useful on its own if you just want Claude Code to drive your browser from a terminal. The two servers written here live under it, because a plugin can only reach files inside its own root. |
+| **`plugin/`** | A Claude Code plugin: four MCP servers on one running Brave, plus the browser skills and `/browser-setup`. Useful on its own if you just want Claude Code to drive your browser from a terminal. The two servers written here live under it, because a plugin can only reach files inside its own root. |
 | **`bridge/`** | The harness. A Slack Socket Mode daemon that maps threads to sessions, serialises work per thread, survives restarts, and recovers its own orphaned messages. |
 | **`workspace/`** | The agent's memory and skills, as a starting template. Semantic memory it reads on demand, procedural skills it can extend itself. |
 | **`plugin/repl/`** | A third MCP server of our own: accessibility snapshots that return a **diff**, and `fetch`, which calls a site's own API from inside a tab already signed in to it. See `plugin/repl/README.md`. |
@@ -83,7 +83,7 @@ The falling curve is the thing to watch either way: a well-fed memory makes each
 pass cheaper, because most of what it reads is already recorded and it says so
 rather than rewriting it.
 
-Disable with `systemctl --user disable --now brave-agent-dream.timer`.
+Disable with `systemctl --user disable --now agentic-browser-dream.timer`.
 
 ## Why it works on real sites
 
@@ -137,7 +137,7 @@ Slack Socket Mode allows several concurrent connections and delivers
 twice, with two agents reaching two different results in the same thread.
 Nothing errors. The agent simply looks like it contradicts itself.
 
-The bridge takes a lock at `~/.local/state/brave-agent/bridge.lock` and refuses
+The bridge takes a lock at `~/.local/state/agentic-browser/bridge.lock` and refuses
 to start if a live process holds it, naming the pid and host so you know what
 to stop. A lock left by a crash is taken over automatically, so this never
 wedges a restart.
@@ -162,7 +162,7 @@ macOS. Comparing against a product you also depend on is awkward to write and
 honest to read: the rows below are about Aside as a whole agent, not about the
 browser, which is very good and is why it is the macOS layer.
 
-| | **brave-agent** | **Aside** | **Hermes Agent** |
+| | **agentic-browser** | **Aside** | **Hermes Agent** |
 |---|---|---|---|
 | Platform | Linux, macOS | **macOS only** | anywhere |
 | Browser layer | Brave (Linux), Aside (macOS) | its own | not a focus |
@@ -230,40 +230,40 @@ switching OS, this is the shape of it.
 ```bash
 # 1. Browser layer
 #    Linux: Brave over CDP
-/plugin marketplace add rafliruslan/brave-agent
-/plugin install brave-agent
-/brave-setup
+/plugin marketplace add rafliruslan/agentic-browser
+/plugin install agentic-browser
+/browser-setup
 
 #    macOS: Aside. Nothing to set up beyond having it installed and signed in;
 #    `aside mcp` is the whole integration.
 aside --version
 
 # 2. Harness
-git clone https://github.com/rafliruslan/brave-agent ~/.local/share/brave-agent
-cd ~/.local/share/brave-agent/bridge && npm install
+git clone https://github.com/rafliruslan/agentic-browser ~/.local/share/agentic-browser
+cd ~/.local/share/agentic-browser/bridge && npm install
 (cd ../repl && npm install)                # Linux only: the diff-snapshot server
 
-mkdir -p ~/.config/brave-agent
-cp config.example/env ~/.config/brave-agent/
-chmod 600 ~/.config/brave-agent/env        # then fill in your tokens
+mkdir -p ~/.config/agentic-browser
+cp config.example/env ~/.config/agentic-browser/
+chmod 600 ~/.config/agentic-browser/env        # then fill in your tokens
 
 # Pick the browser layer. This file IS the choice of browser.
 sed "s|/home/USERNAME|$HOME|" config.example/mcp.json \
-  > ~/.config/brave-agent/mcp.json                                  # Linux, Brave
+  > ~/.config/agentic-browser/mcp.json                                  # Linux, Brave
 sed "s|/Users/USERNAME|$HOME|" config.example/mcp.aside.json \
-  > ~/.config/brave-agent/mcp.json                                  # macOS, Aside
+  > ~/.config/agentic-browser/mcp.json                                  # macOS, Aside
 
 # 3. Keep it running (pick your platform)
 
 # Linux
-cp systemd/brave-agent.service ~/.config/systemd/user/
+cp systemd/agentic-browser.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now brave-agent
+systemctl --user enable --now agentic-browser
 
 # macOS
-sed "s|/Users/USERNAME|$HOME|g" launchd/com.brave-agent.bridge.plist \
-  > ~/Library/LaunchAgents/com.brave-agent.bridge.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.brave-agent.bridge.plist
+sed "s|/Users/USERNAME|$HOME|g" launchd/com.agentic-browser.bridge.plist \
+  > ~/Library/LaunchAgents/com.agentic-browser.bridge.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agentic-browser.bridge.plist
 ```
 
 `config.example/mcp.json` repeats what the plugin already registers, and has
@@ -278,7 +278,7 @@ somewhere else and set `AGENT_WORKSPACE` only if you want the repo to stay
 pristine while the agent writes its own memory.
 
 Optionally give it a character: `cp examples/hammock/persona.md
-~/.config/brave-agent/persona.md` and edit. Without one it falls back to a plain
+~/.config/agentic-browser/persona.md` and edit. Without one it falls back to a plain
 assistant that still carries the honesty and autonomy rules.
 
 You need a Slack app with Socket Mode on, `app_mention` subscribed, and 11 bot
@@ -313,9 +313,9 @@ both machines, and the thing that differs is one JSON file.
 |---|---|---|
 | browser | Brave, driven over CDP | [Aside](https://aside.com) |
 | MCP config | `config.example/mcp.json` | `config.example/mcp.aside.json` |
-| browser tools | `brave`, `devtools`, `brave-repl` | `aside` |
+| browser tools | `brave`, `devtools`, `browser-repl` | `aside` |
 | service | `bridge/systemd/` | `bridge/launchd/` |
-| history db | `~/.local/share/brave-profile/Default/History` | `~/Library/Application Support/Aside/Default/History` |
+| history db | `~/.local/share/browser-profile/Default/History` | `~/Library/Application Support/Aside/Default/History` |
 
 Nothing else in the bridge or the REPL is written against an OS. Every path is
 `homedir()` plus an XDG-shaped suffix, which is a plain directory on macOS too.
@@ -324,7 +324,7 @@ Nothing else in the bridge or the REPL is written against an OS. Every path is
 ### The allowlist is derived, not written down
 
 `--allowedTools` is a whitelist, and its failure mode is silent: an unlisted
-tool is not denied loudly, it is simply never offered. A hardcoded `mcp__brave`
+tool is not denied loudly, it is simply never offered. A hardcoded `mcp__browser`
 list therefore leaves the agent on the other machine with no browser and no
 error to explain it. So `browser.mjs` reads the MCP config and allows
 `mcp__<server>` for whatever it finds. `--strict-mcp-config` means that file is
@@ -343,7 +343,7 @@ which it got:
 
 ```
 [browser] mcp__aside (from …/mcp.json), not CDP, health preflight off
-[browser] mcp__brave, mcp__devtools, mcp__brave-repl (from …/mcp.json), CDP at http://127.0.0.1:9222
+[browser] mcp__browser, mcp__devtools, mcp__browser-repl (from …/mcp.json), CDP at http://127.0.0.1:9222
 ```
 
 ### Where the macOS setup is less safe, plainly
@@ -378,7 +378,7 @@ where a timer missed while the machine was asleep fires on wake. On macOS a
 close enough for a memory pass and worth knowing for anything that must not be
 skipped.
 
-`/brave-setup` also documents running Brave on macOS, for anyone who wants that
+`/browser-setup` also documents running Brave on macOS, for anyone who wants that
 instead of Aside. The Chromium 136+ refusal to open a debug port at the default
 profile path applies on both platforms.
 

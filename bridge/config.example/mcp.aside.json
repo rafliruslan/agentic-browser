@@ -10,7 +10,7 @@
     "memory": {
       "command": "node",
       "args": [
-        "/Users/USERNAME/.local/share/brave-agent/plugin/memory/server.mjs"
+        "/Users/USERNAME/.local/share/agentic-browser/plugin/memory/server.mjs"
       ]
     }
   }

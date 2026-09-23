@@ -13,7 +13,7 @@
  * inside `act` could only be removed by removing all of `act`, and the reason
  * `act` has a closed enum at all is that a dangerous capability should be
  * removable - which is how `browser_run_code_unsafe` came to be denied here.
- * One `--deniedTools mcp__brave-repl__fetch` turns this off and leaves the rest.
+ * One `--deniedTools mcp__browser-repl__fetch` turns this off and leaves the rest.
  *
  * Why same-origin, enforced here rather than left to the browser: the request
  * runs inside a page that is already signed in, so it carries that session's

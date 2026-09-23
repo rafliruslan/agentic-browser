@@ -22,7 +22,7 @@ import { transcriptPathFor } from './mirror.mjs';
 import { readIndex, groupBySession, readRange, indexPathIn } from './runs-index.mjs';
 
 const WORKSPACE = process.env.AGENT_WORKSPACE
-  || join(homedir(), '.local', 'share', 'brave-agent', 'workspace');
+  || join(homedir(), '.local', 'share', 'agentic-browser', 'workspace');
 
 /**
  * Claude Code stores a project's transcripts under a slug of its cwd, with

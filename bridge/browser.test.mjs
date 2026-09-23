@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { toolPrefixes, allowedTools, browserPrefixes, cdpEndpoint, browserCdpUrl, BASE_TOOLS } from './browser.mjs';
 
-const BRAVE = { mcpServers: { brave: {}, devtools: {}, 'brave-repl': {} } };
+const BRAVE = { mcpServers: { browser: {}, devtools: {}, 'browser-repl': {} } };
 const ASIDE = { mcpServers: { aside: {} } };
 
 test('toolPrefixes names every server in the config', () => {
-  assert.deepEqual(toolPrefixes(BRAVE), ['mcp__brave', 'mcp__devtools', 'mcp__brave-repl']);
+  assert.deepEqual(toolPrefixes(BRAVE), ['mcp__browser', 'mcp__devtools', 'mcp__browser-repl']);
 });
 
 // The whole point: the same code produces a different allowlist per machine.
@@ -22,7 +22,7 @@ test('toolPrefixes handles a config with no servers', () => {
 });
 
 test('toolPrefixes ignores an empty server name', () => {
-  assert.deepEqual(toolPrefixes({ mcpServers: { '': {}, brave: {} } }), ['mcp__brave']);
+  assert.deepEqual(toolPrefixes({ mcpServers: { '': {}, browser: {} } }), ['mcp__browser']);
 });
 
 test('allowedTools appends the base tools after the browser', async () => {
@@ -33,9 +33,9 @@ test('allowedTools appends the base tools after the browser', async () => {
 test('allowedTools reads the Brave layer whole', async () => {
   const read = async () => JSON.stringify(BRAVE);
   const tools = await allowedTools('/x', { read });
-  assert.ok(tools.includes('mcp__brave'));
+  assert.ok(tools.includes('mcp__browser'));
   assert.ok(tools.includes('mcp__devtools'));
-  assert.ok(tools.includes('mcp__brave-repl'));
+  assert.ok(tools.includes('mcp__browser-repl'));
 });
 
 // Refusing to start would take away the very channel you would use to ask why.
@@ -76,16 +76,16 @@ test('allowedTools honours a narrower base list', async () => {
 
 test('browserPrefixes returns the browser half alone', async () => {
   const read = async () => JSON.stringify(BRAVE);
-  assert.deepEqual(await browserPrefixes('/x', { read }), ['mcp__brave', 'mcp__devtools', 'mcp__brave-repl']);
+  assert.deepEqual(await browserPrefixes('/x', { read }), ['mcp__browser', 'mcp__devtools', 'mcp__browser-repl']);
 });
 
 // Caught during the port: config.example/mcp.json was written from the plugin's
-// two servers and silently dropped brave-repl, which the hardcoded list had.
+// two servers and silently dropped browser-repl, which the hardcoded list had.
 // --allowedTools is a whitelist, so that loses the diff-snapshot server with no
 // error anywhere. The shipped Linux config must still name all three.
 test('the shipped Linux config yields the tools the hardcoded list had', async () => {
   const tools = await allowedTools(new URL('./config.example/mcp.json', import.meta.url).pathname);
-  for (const t of ['mcp__brave', 'mcp__devtools', 'mcp__brave-repl']) {
+  for (const t of ['mcp__browser', 'mcp__devtools', 'mcp__browser-repl']) {
     assert.ok(tools.includes(t), `${t} missing from config.example/mcp.json`);
   }
 });
@@ -93,13 +93,13 @@ test('the shipped Linux config yields the tools the hardcoded list had', async (
 test('the shipped macOS config attaches Aside', async () => {
   const tools = await allowedTools(new URL('./config.example/mcp.aside.json', import.meta.url).pathname);
   assert.ok(tools.includes('mcp__aside'));
-  assert.ok(!tools.includes('mcp__brave'), 'the macOS layer must not also attach Brave');
+  assert.ok(!tools.includes('mcp__browser'), 'the macOS layer must not also attach Brave');
 });
 
 // --- which browser layer, and therefore whether a CDP preflight makes sense ---
 
 test('cdpEndpoint finds the Playwright endpoint', () => {
-  assert.equal(cdpEndpoint({ mcpServers: { brave: { args: ['-y', 'x', '--cdp-endpoint', 'http://127.0.0.1:9222'] } } }), 'http://127.0.0.1:9222');
+  assert.equal(cdpEndpoint({ mcpServers: { browser: { args: ['-y', 'x', '--cdp-endpoint', 'http://127.0.0.1:9222'] } } }), 'http://127.0.0.1:9222');
 });
 
 test('cdpEndpoint finds the chrome-devtools spelling too', () => {
@@ -139,7 +139,7 @@ test('browserCdpUrl treats an unreadable config as no CDP', async () => {
 import { unsafeTools, UNSAFE_SUFFIXES } from './browser.mjs';
 
 test('a renamed browser server still has its script tools denied', () => {
-  // The whole point. Denying the literal mcp__brave__* names held only while
+  // The whole point. Denying the literal mcp__browser__* names held only while
   // the server was called brave; pointing the same Playwright MCP at Chromium
   // under another key reopened a door that was shut deliberately.
   const got = unsafeTools({ mcpServers: { chromium: { args: ['--cdp-endpoint', 'http://x'] } } });
@@ -151,7 +151,7 @@ test('the historical names are kept even when those servers are absent', () => {
   // A machine whose config we cannot read must not end up with a shorter
   // denylist than it had before.
   const got = unsafeTools({ mcpServers: { chromium: {} } });
-  assert.ok(got.includes('mcp__brave__browser_run_code_unsafe'));
+  assert.ok(got.includes('mcp__browser__browser_run_code_unsafe'));
   assert.ok(got.includes('mcp__devtools__evaluate_script'));
 });
 
@@ -166,11 +166,11 @@ test('every configured server contributes its own spelling', () => {
 test('a junk config still denies the historical names', () => {
   for (const cfg of [null, {}, { mcpServers: 'nope' }]) {
     const got = unsafeTools(cfg);
-    assert.ok(got.includes('mcp__brave__browser_run_code_unsafe'));
+    assert.ok(got.includes('mcp__browser__browser_run_code_unsafe'));
   }
 });
 
 test('no duplicates when the server really is called brave', () => {
-  const got = unsafeTools({ mcpServers: { brave: {} } });
-  assert.equal(got.filter((t) => t === 'mcp__brave__browser_run_code_unsafe').length, 1);
+  const got = unsafeTools({ mcpServers: { browser: {} } });
+  assert.equal(got.filter((t) => t === 'mcp__browser__browser_run_code_unsafe').length, 1);
 });

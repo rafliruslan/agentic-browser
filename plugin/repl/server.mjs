@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * brave-repl: batched, typed browser actions over an existing CDP connection.
+ * browser-repl: batched, typed browser actions over an existing CDP connection.
  *
  * This exists to close the round-trip gap with single-`repl` agents like Aside,
  * where one 120-second call can snapshot, decide, act and verify. Granular MCP
@@ -235,7 +235,7 @@ const TOOLS = [
   {
     name: 'snapshot',
     description:
-      'Accessibility tree of a page with stable [ref=eNN] ids. mode "diff" returns only what appeared and disappeared since your last snapshot of that page, which is usually a fraction of the size, measured at 190 bytes against a 5.5KB full tree. Use diff for every read after the first. `ref` narrows to one subtree and `interactive` drops everything you cannot act on; unlike diff they both work on a first read, which is what you want after opening a menu or a dialog. These refs work only with this server; mcp__brave__ and mcp__devtools__ each use their own.',
+      'Accessibility tree of a page with stable [ref=eNN] ids. mode "diff" returns only what appeared and disappeared since your last snapshot of that page, which is usually a fraction of the size, measured at 190 bytes against a 5.5KB full tree. Use diff for every read after the first. `ref` narrows to one subtree and `interactive` drops everything you cannot act on; unlike diff they both work on a first read, which is what you want after opening a menu or a dialog. These refs work only with this server; mcp__browser__ and mcp__devtools__ each use their own.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -303,7 +303,7 @@ const TOOLS = [
   },
 ];
 
-const server = new Server({ name: 'brave-repl', version: '0.1.0' }, { capabilities: { tools: {} } });
+const server = new Server({ name: 'browser-repl', version: '0.1.0' }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 

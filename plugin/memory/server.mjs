@@ -7,7 +7,7 @@
  * one call that returns two paragraphs instead of a Grep, a decision, and a
  * Read of a whole file to reach them.
  *
- * It is a SEPARATE server on purpose. brave-repl is listed only in the Brave
+ * It is a SEPARATE server on purpose. browser-repl is listed only in the Brave
  * config, so a tool added there would exist on Linux and silently not on
  * macOS - and the whole point of matching Aside here is that the persona reads
  * the same on both machines. This server goes in mcp.json AND mcp.aside.json.

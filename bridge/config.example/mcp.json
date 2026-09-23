@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "brave": {
+    "browser": {
       "command": "npx",
       "args": [
         "-y",
@@ -18,16 +18,16 @@
         "http://127.0.0.1:9222"
       ]
     },
-    "brave-repl": {
+    "browser-repl": {
       "command": "node",
       "args": [
-        "/home/USERNAME/.local/share/brave-agent/plugin/repl/server.mjs"
+        "/home/USERNAME/.local/share/agentic-browser/plugin/repl/server.mjs"
       ]
     },
     "memory": {
       "command": "node",
       "args": [
-        "/home/USERNAME/.local/share/brave-agent/plugin/memory/server.mjs"
+        "/home/USERNAME/.local/share/agentic-browser/plugin/memory/server.mjs"
       ]
     }
   }

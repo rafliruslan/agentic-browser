@@ -1,6 +1,6 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
-  "name": "brave-agent",
+  "name": "agentic-browser",
   "version": "0.1.0",
   "description": "Drive your real, logged-in Chromium browser (Chromium, Chrome, Brave, Edge) from Claude Code over CDP.",
   "author": {
@@ -10,7 +10,7 @@
   "skills": [
     "./"
   ],
-  "homepage": "https://github.com/rafliruslan/brave-agent",
+  "homepage": "https://github.com/rafliruslan/agentic-browser",
   "keywords": [
     "brave",
     "browser",

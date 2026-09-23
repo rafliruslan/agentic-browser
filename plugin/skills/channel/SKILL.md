@@ -17,7 +17,7 @@ before, or write something extra beyond the reply.
 The Slack token is in the bridge env. Read it once, reuse the client.
 
 ```js
-const token = (await fs.readFile(process.env.HOME + '/.config/brave-agent/env', 'utf8'))
+const token = (await fs.readFile(process.env.HOME + '/.config/agentic-browser/env', 'utf8'))
   .match(/^SLACK_BOT_TOKEN=(.+)$/m)[1].trim();
 const api = async (method, body) => {
   const r = await fetch(`https://slack.com/api/${method}`, {

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  macOS counterpart of systemd/brave-agent-routines.{service,timer}: scheduled routines.
+  macOS counterpart of systemd/agentic-browser-routines.{service,timer}: scheduled routines.
   StartInterval replaces the timer; launchd has no separate timer unit.
 
   StartInterval is 60, not 900, and that matters. isDue matches the minute
@@ -14,34 +14,34 @@
   three files and exits when nothing is due.
 
   AGENT_WORKSPACE must be set: routines.mjs otherwise looks in
-  ~/.local/share/brave-agent/workspace, finds no routines, and reports
+  ~/.local/share/agentic-browser/workspace, finds no routines, and reports
   "nothing due" forever. launchd does not expand ~ or $HOME.
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.brave-agent.routines</string>
+    <string>com.agentic-browser.routines</string>
     <key>ProgramArguments</key>
     <array>
         <string>/opt/homebrew/bin/node</string>
-        <string>/Users/USERNAME/.local/share/brave-agent/bridge/routines.mjs</string>
+        <string>/Users/USERNAME/.local/share/agentic-browser/bridge/routines.mjs</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/USERNAME/.local/share/brave-agent/bridge</string>
+    <string>/Users/USERNAME/.local/share/agentic-browser/bridge</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>/Users/USERNAME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>AGENT_WORKSPACE</key>
-        <string>/Users/USERNAME/.local/share/brave-agent/workspace</string>
+        <string>/Users/USERNAME/.local/share/agentic-browser/workspace</string>
     </dict>
     <key>StartInterval</key>
     <integer>60</integer>
     <key>RunAtLoad</key>
     <false/>
     <key>StandardOutPath</key>
-    <string>/Users/USERNAME/Library/Logs/brave-agent-routines.log</string>
+    <string>/Users/USERNAME/Library/Logs/agentic-browser-routines.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/USERNAME/Library/Logs/brave-agent-routines.log</string>
+    <string>/Users/USERNAME/Library/Logs/agentic-browser-routines.log</string>
 </dict>
 </plist>

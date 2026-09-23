@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "brave": {
+    "browser": {
       "command": "npx",
       "args": [
         "-y",
@@ -18,7 +18,7 @@
         "http://127.0.0.1:9222"
       ]
     },
-    "brave-repl": {
+    "browser-repl": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/repl/server.mjs"]
     },

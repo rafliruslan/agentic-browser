@@ -1,4 +1,4 @@
-# Copy to ~/.config/brave-agent/env and chmod 600. Never commit the filled copy.
+# Copy to ~/.config/agentic-browser/env and chmod 600. Never commit the filled copy.
 #
 # ALLOWED_USER is the entire security boundary. There is no channel allowlist by
 # default: exactly one person may issue commands, anywhere the bot has been

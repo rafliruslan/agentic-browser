@@ -39,7 +39,7 @@ const run = promisify(execFile);
 const HISTORY =
   process.env.AGENT_HISTORY_DB ||
   process.env.BRAVE_HISTORY_DB ||
-  join(homedir(), '.local', 'share', 'brave-profile', 'Default', 'History');
+  join(homedir(), '.local', 'share', 'browser-profile', 'Default', 'History');
 
 /** Chrome stores time as microseconds since 1601-01-01. */
 const CHROME_EPOCH_OFFSET = 11644473600;

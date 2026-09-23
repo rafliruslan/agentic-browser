@@ -14,7 +14,7 @@
  * one wedged Google Calendar tab and WhatsApp Web's WASM VoIP workers. With
  * those two cleared, connectOverCDP went from a hard 30s timeout to 935ms.
  *
- * The agent cannot route around this. On that run it tried brave, brave-repl and
+ * The agent cannot route around this. On that run it tried brave, browser-repl and
  * devtools, got a timeout from all three, and spent its remaining budget writing
  * a raw CDP client in Bash because raw CDP can talk to one target without
  * enabling anything on the others. That worked, and it is also the reason the

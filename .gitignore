@@ -2,7 +2,7 @@ node_modules/
 .playwright-mcp/
 *.log
 
-# Real config lives in ~/.config/brave-agent, never in the repo.
+# Real config lives in ~/.config/agentic-browser, never in the repo.
 # The templates under bridge/config.example/ are intentionally tracked.
 /env
 /config/

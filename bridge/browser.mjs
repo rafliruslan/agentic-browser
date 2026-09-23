@@ -11,8 +11,8 @@ import { readFile } from 'node:fs/promises';
  * a config edit rather than a patch.
  *
  * This is what lets one codebase serve two machines: Brave over CDP on Linux
- * (`brave`, `devtools`, `brave-repl`), Aside on macOS (`aside`). A hardcoded
- * `mcp__brave` list silently leaves the agent with no browser at all on the
+ * (`brave`, `devtools`, `browser-repl`), Aside on macOS (`aside`). A hardcoded
+ * `mcp__browser` list silently leaves the agent with no browser at all on the
  * other one, because --allowedTools is a whitelist: an unlisted tool is not
  * denied loudly, it is simply never offered.
  */
@@ -105,7 +105,7 @@ export async function browserCdpUrl(path, { read = readFile } = {}) {
 /**
  * Tool names that run arbitrary script, whatever the browser is called.
  *
- * These were denied by their literal names, `mcp__brave__browser_run_code_unsafe`
+ * These were denied by their literal names, `mcp__browser__browser_run_code_unsafe`
  * and `mcp__devtools__evaluate_script`. That held exactly as long as the server
  * was called `brave`: point the same Playwright MCP at Chromium under the key
  * `chromium` and the tool becomes `mcp__chromium__browser_run_code_unsafe`,
@@ -118,7 +118,7 @@ export async function browserCdpUrl(path, { read = readFile } = {}) {
  */
 export const UNSAFE_SUFFIXES = ['browser_run_code_unsafe', 'evaluate_script'];
 
-const LEGACY_DENIED = ['mcp__brave__browser_run_code_unsafe', 'mcp__devtools__evaluate_script'];
+const LEGACY_DENIED = ['mcp__browser__browser_run_code_unsafe', 'mcp__devtools__evaluate_script'];
 
 export function unsafeTools(config) {
   const names = new Set(LEGACY_DENIED);

@@ -60,7 +60,7 @@ const SESSION_IN_USE = /session id .* is already in use/i;
  * `Task`                            one Slack message must be one session, or a
  *                                   single mention becomes four sidebar entries.
  *
- * `mcp__brave__browser_run_code_unsafe`
+ * `mcp__browser__browser_run_code_unsafe`
  *                                   arbitrary JS against a live logged-in page.
  *                                   Observed 2026-08-25: `browser_click` cannot
  *                                   work on Google Calendar (the ref resolves
@@ -98,7 +98,7 @@ const SESSION_IN_USE = /session id .* is already in use/i;
  */
 export const DENIED_TOOLS = [
   'Task',
-  'mcp__brave__browser_run_code_unsafe',
+  'mcp__browser__browser_run_code_unsafe',
   'mcp__devtools__evaluate_script',
 ];
 

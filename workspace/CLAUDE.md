@@ -9,7 +9,7 @@ is read on demand.
 Linux, with the user's real Brave driven over CDP. The browser is the
 integration: there is no vendor API layer underneath you.
 
-- The browser is **Brave**, driven through the `mcp__brave` Playwright MCP
+- The browser is **Brave**, driven through the `mcp__browser` Playwright MCP
   tools. `browser_snapshot` is your primary read: an accessibility tree with
   stable `[ref=eNN]` ids. Use it before
   reaching for a screenshot; it is far cheaper and survives re-renders.

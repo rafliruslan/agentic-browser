@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  macOS counterpart of systemd/brave-agent-dream.{service,timer}: memory consolidation.
+  macOS counterpart of systemd/agentic-browser-dream.{service,timer}: memory consolidation.
   StartInterval replaces the timer; launchd has no separate timer unit.
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.brave-agent.dream</string>
+    <string>com.agentic-browser.dream</string>
     <key>ProgramArguments</key>
     <array>
         <string>/opt/homebrew/bin/node</string>
-        <string>/Users/USERNAME/.local/share/brave-agent/bridge/dream.mjs</string>
+        <string>/Users/USERNAME/.local/share/agentic-browser/bridge/dream.mjs</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/USERNAME/.local/share/brave-agent/bridge</string>
+    <string>/Users/USERNAME/.local/share/agentic-browser/bridge</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -27,8 +27,8 @@
     <key>RunAtLoad</key>
     <false/>
     <key>StandardOutPath</key>
-    <string>/Users/USERNAME/Library/Logs/brave-agent-dream.log</string>
+    <string>/Users/USERNAME/Library/Logs/agentic-browser-dream.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/USERNAME/Library/Logs/brave-agent-dream.log</string>
+    <string>/Users/USERNAME/Library/Logs/agentic-browser-dream.log</string>
 </dict>
 </plist>

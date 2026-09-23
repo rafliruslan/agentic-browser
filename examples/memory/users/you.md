@@ -5,7 +5,7 @@
 Two different things live here. Keep them apart, because conflating them is the
 commonest way this file goes wrong.
 
-- **Talking TO you** is the persona (`~/.config/brave-agent/persona.md`). The
+- **Talking TO you** is the persona (`~/.config/agentic-browser/persona.md`). The
   bridge normalises that text on the way out, so mrkdwn syntax rules do not
   belong there.
 - **Writing AS you** is this file. Nothing normalises that. Every rule below has

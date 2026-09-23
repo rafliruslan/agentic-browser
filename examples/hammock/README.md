@@ -2,7 +2,7 @@
 
 The persona this project was extracted from, kept as a worked example.
 
-Copy `persona.md` to `~/.config/brave-agent/persona.md` and edit, or write your
+Copy `persona.md` to `~/.config/agentic-browser/persona.md` and edit, or write your
 own from scratch. The bridge reads that file once at startup and prepends it to
 the first message of each thread only.
 

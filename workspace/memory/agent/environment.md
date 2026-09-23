@@ -18,9 +18,9 @@ Written 2026-08-25, the day the agent moved off the Mac.
 
 ## Browser
 
-- **Brave**, running the user's real profile at `~/.local/share/brave-profile`,
+- **Brave**, running the user's real profile at `~/.local/share/browser-profile`,
   attached over CDP on `127.0.0.1:9222`.
-- **Two servers, one browser.** `mcp__brave__*` is Playwright MCP and
+- **Two servers, one browser.** `mcp__browser__*` is Playwright MCP and
   `mcp__devtools__*` is chrome-devtools-mcp; both attach to the same CDP
   endpoint and see the same tabs.
   - **Read with brave.** `browser_snapshot` gives an accessibility tree with
@@ -39,12 +39,12 @@ Written 2026-08-25, the day the agent moved off the Mac.
   merely needing to be driven.
 - The profile is **already logged in** to Slack, Google Workspace, Linear and
   Shopify. Nothing needs OAuth.
-- **Always the Work profile.** Inside `~/.local/share/brave-profile` the
+- **Always the Work profile.** Inside `~/.local/share/browser-profile` the
   profiles are directories, not display names: `Default` is **Work**,
   `Profile 3` is **Personal**. Brave is pinned to `Default` by
   `--profile-directory` in `~/.config/brave-flags.conf`, and CDP tabs land
   there. Verified 2026-08-25: `brave://version` reported Profile Path
-  `/home/<you>/.local/share/brave-profile/Default`.
+  `/home/<you>/.local/share/browser-profile/Default`.
 - **Never work in Personal.** If you find yourself on a page signed in as his
   personal account rather than the the company one, stop and say so rather than acting.
   `brave://version` confirms which profile you are in.
@@ -76,7 +76,7 @@ None of it is callable:
 
 | Gone | Now |
 |---|---|
-| `repl` tool, persistent JS scope | Individual `mcp__brave` tool calls |
+| `repl` tool, persistent JS scope | Individual `mcp__browser` tool calls |
 | `snapshot(page)` | `browser_snapshot` |
 | `openTab()`, `attachBrowserTab()` | `browser_navigate`, `browser_tabs` |
 | `page.locator('e77').click()` | `browser_click` with a `ref` |

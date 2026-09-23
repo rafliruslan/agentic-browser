@@ -38,13 +38,13 @@ import { allowedTools, deniedBrowserTools } from './browser.mjs';
 import { healBrowser } from './browser-health.mjs';
 
 const WORKSPACE =
-  process.env.AGENT_WORKSPACE || join(homedir(), '.local', 'share', 'brave-agent', 'workspace');
+  process.env.AGENT_WORKSPACE || join(homedir(), '.local', 'share', 'agentic-browser', 'workspace');
 const ROUTINES = join(WORKSPACE, 'memory', 'routines');
 const STATE =
   process.env.AGENT_ROUTINE_STATE ||
-  join(homedir(), '.local', 'state', 'brave-agent', 'routines.json');
+  join(homedir(), '.local', 'state', 'agentic-browser', 'routines.json');
 const MCP_CONFIG =
-  process.env.AGENT_MCP_CONFIG || join(homedir(), '.config', 'brave-agent', 'mcp.json');
+  process.env.AGENT_MCP_CONFIG || join(homedir(), '.config', 'agentic-browser', 'mcp.json');
 
 /**
  * Narrower than the bridge on purpose: no WebFetch, no WebSearch. An unattended

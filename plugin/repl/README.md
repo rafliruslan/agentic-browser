@@ -1,4 +1,4 @@
-# brave-repl
+# browser-repl
 
 A third MCP server for the same Brave, built to close the round-trip gap with
 single-`repl` agents like Aside. It ships one clear win and one measured
@@ -78,7 +78,7 @@ inside `act` could only be removed by removing all of `act`, and the whole reaso
 `op` is a closed enum is that a dangerous capability should be removable:
 
 ```
---deniedTools mcp__brave-repl__fetch
+--deniedTools mcp__browser-repl__fetch
 ```
 
 Writes act as the user immediately, with no draft step and no undo. That is the
@@ -121,9 +121,9 @@ Three servers now attach to the same browser and none of their ids interchange:
 
 | Server | id form |
 |---|---|
-| `mcp__brave__` (Playwright MCP) | `[ref=e12]` |
+| `mcp__browser__` (Playwright MCP) | `[ref=e12]` |
 | `mcp__devtools__` (chrome-devtools-mcp) | `uid=1_21` |
-| `mcp__brave-repl__` | `[ref=e12]`, tagged as `data-bref` |
+| `mcp__browser-repl__` | `[ref=e12]`, tagged as `data-bref` |
 
 Snapshot with the server you are about to act with. Ours are DOM attributes
 written during the snapshot and cleared at the next one, so a ref is valid only
@@ -152,11 +152,11 @@ obviously broken, which is the worst failure mode a read tool has.
 ```json
 {
   "mcpServers": {
-    "brave-repl": { "command": "node", "args": ["/path/to/repl/server.mjs"] }
+    "browser-repl": { "command": "node", "args": ["/path/to/repl/server.mjs"] }
   }
 }
 ```
 
 `BRAVE_CDP_ENDPOINT` overrides the default `http://127.0.0.1:9222`.
-Requires `/brave-setup` to have been run, since it attaches to an existing
+Requires `/browser-setup` to have been run, since it attaches to an existing
 browser rather than launching one.

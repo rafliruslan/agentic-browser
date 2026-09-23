@@ -36,9 +36,9 @@ import { createRunRegistry } from './runs.mjs';
 
 const { App } = bolt;
 
-const ENV_PATH = process.env.AGENT_ENV_PATH || join(homedir(), '.config', 'brave-agent', 'env');
-const WORKSPACE = process.env.AGENT_WORKSPACE || join(homedir(), '.local', 'share', 'brave-agent', 'workspace');
-const MCP_CONFIG = process.env.AGENT_MCP_CONFIG || join(homedir(), '.config', 'brave-agent', 'mcp.json');
+const ENV_PATH = process.env.AGENT_ENV_PATH || join(homedir(), '.config', 'agentic-browser', 'env');
+const WORKSPACE = process.env.AGENT_WORKSPACE || join(homedir(), '.local', 'share', 'agentic-browser', 'workspace');
+const MCP_CONFIG = process.env.AGENT_MCP_CONFIG || join(homedir(), '.config', 'agentic-browser', 'mcp.json');
 
 /**
  * Tools the agent may use without being asked.
@@ -67,7 +67,7 @@ const MCP_CONFIG = process.env.AGENT_MCP_CONFIG || join(homedir(), '.config', 'b
  *                button, same page: playwright `browser_click` failed three
  *                times; devtools click succeeded on the first attempt.
  *
- *   `brave-repl` the same browser again, but its snapshot returns a DIFF.
+ *   `browser-repl` the same browser again, but its snapshot returns a DIFF.
  *                Measured on Google Calendar: 5415 bytes for the full tree
  *                against 227 for the diff after opening a menu. Re-reading a
  *                page is the most repeated thing the agent does, so this is

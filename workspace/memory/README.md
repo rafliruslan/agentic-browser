@@ -115,7 +115,7 @@ exist so the same argument is not had twice.
 - **Persona content filed under autonomy.** The source system put character,
   tone and length rules into `agent/autonomy-and-approval.md` because they
   happened to share a source file with the autonomy instructions. Wrong reason
-  to co-locate. Here the persona lives in `~/.config/brave-agent/persona.md`,
+  to co-locate. Here the persona lives in `~/.config/agentic-browser/persona.md`,
   outside memory entirely, and `agent/autonomy.md` covers only how much to do
   before asking.
 - **A recurring job described as a company fact.** `bixgrow-payouts.md` sat in

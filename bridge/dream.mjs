@@ -30,8 +30,8 @@ import { observe, render as renderBrowsing } from './observe.mjs';
 /**
  * Claude Code stores a session transcript under ~/.claude/projects/<encoded>,
  * where <encoded> is the absolute workspace path with every `/` and `.` turned
- * into `-`. So /home/u/.local/share/brave-agent/workspace becomes
- * -home-u--local-share-brave-agent-workspace: the double dash is the slash and
+ * into `-`. So /home/u/.local/share/agentic-browser/workspace becomes
+ * -home-u--local-share-agentic-browser-workspace: the double dash is the slash and
  * the dot of `/.local` collapsing together.
  */
 function encodeProjectDir(abs) {
@@ -39,13 +39,13 @@ function encodeProjectDir(abs) {
 }
 
 const WORKSPACE =
-  process.env.AGENT_WORKSPACE || join(homedir(), '.local', 'share', 'brave-agent', 'workspace');
+  process.env.AGENT_WORKSPACE || join(homedir(), '.local', 'share', 'agentic-browser', 'workspace');
 const TRANSCRIPTS =
   process.env.AGENT_TRANSCRIPTS ||
   join(homedir(), '.claude', 'projects', encodeProjectDir(WORKSPACE));
 const STATE =
   process.env.AGENT_DREAM_STATE ||
-  join(homedir(), '.local', 'state', 'brave-agent', 'dream.json');
+  join(homedir(), '.local', 'state', 'agentic-browser', 'dream.json');
 
 const exec = promisify(execFile);
 

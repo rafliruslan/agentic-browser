@@ -28,7 +28,7 @@ import { dirname, join } from 'node:path';
 import { homedir, hostname, uptime } from 'node:os';
 
 export const DEFAULT_LOCK_PATH = join(
-  homedir(), '.local', 'state', 'brave-agent', 'bridge.lock',
+  homedir(), '.local', 'state', 'agentic-browser', 'bridge.lock',
 );
 
 /** True if a process with this pid exists and we may signal it. */

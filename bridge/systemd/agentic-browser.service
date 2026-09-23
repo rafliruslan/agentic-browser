@@ -1,8 +1,8 @@
-# Copy to ~/.config/systemd/user/brave-agent.service, then:
+# Copy to ~/.config/systemd/user/agentic-browser.service, then:
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now brave-agent
+#   systemctl --user enable --now agentic-browser
 [Unit]
-Description=brave-agent Slack bridge (Socket Mode -> Claude Code -> Brave)
+Description=agentic-browser Slack bridge (Socket Mode -> Claude Code -> Brave)
 After=network-online.target
 Wants=network-online.target
 # Only ever ONE bridge may hold the Socket Mode connection. Slack delivers
@@ -14,8 +14,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-WorkingDirectory=%h/.local/share/brave-agent/bridge
-ExecStart=/usr/bin/env node %h/.local/share/brave-agent/bridge/index.mjs
+WorkingDirectory=%h/.local/share/agentic-browser/bridge
+ExecStart=/usr/bin/env node %h/.local/share/agentic-browser/bridge/index.mjs
 # If node is managed by a version manager, point PATH at its shims rather than a
 # pinned install path so a version bump does not leave this unit on a stale binary.
 Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -24,9 +24,9 @@ Environment=NODE_ENV=production
 # assistant that still carries the honesty and autonomy rules, which is a
 # perfectly good default and therefore easy not to notice. Copy
 # examples/hammock/persona.md to start from a worked one.
-Environment=AGENT_PERSONA_PATH=%h/.config/brave-agent/persona.md
+Environment=AGENT_PERSONA_PATH=%h/.config/agentic-browser/persona.md
 # Optional: credentials or other secrets, mode 600.
-# EnvironmentFile=%h/.config/brave-agent/secrets
+# EnvironmentFile=%h/.config/agentic-browser/secrets
 Restart=on-failure
 RestartSec=5
 

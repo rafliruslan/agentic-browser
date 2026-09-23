@@ -85,7 +85,7 @@ a wrong ref, not a timing problem, and retrying does not help. Waiting longer
 does not help either.
 
 **Use the other browser server instead.** You have two attached to the same
-Brave: `mcp__brave__*` (Playwright) and `mcp__devtools__*` (chrome-devtools-mcp).
+Brave: `mcp__browser__*` (Playwright) and `mcp__devtools__*` (chrome-devtools-mcp).
 They see the same tabs and the same pages.
 
 chrome-devtools-mcp dispatches clicks over CDP without Playwright's
@@ -103,7 +103,7 @@ Note the two servers use **different element identifiers**. Playwright gives
 `[ref=e123]`, devtools gives `uid=1_21`. A ref from one is meaningless to the
 other, so snapshot with whichever server you are about to act with.
 
-Reading is still cheaper and richer with `mcp__brave__browser_snapshot` or
+Reading is still cheaper and richer with `mcp__browser__browser_snapshot` or
 `browser_find`. A reasonable split on this site: read with brave, click with
 devtools.
 

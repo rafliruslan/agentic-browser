@@ -16,17 +16,17 @@ node "${CLAUDE_PLUGIN_ROOT}/../bridge/sessions-cli.mjs" -n 20
 
 If the plugin is installed rather than run from a clone, `bridge/` is not
 beside it. Use the checkout instead, at wherever you cloned it - the README
-installs to `~/.local/share/brave-agent`:
+installs to `~/.local/share/agentic-browser`:
 
 ```bash
-node ~/.local/share/brave-agent/bridge/sessions-cli.mjs -n 20
+node ~/.local/share/agentic-browser/bridge/sessions-cli.mjs -n 20
 ```
 
 Two environment variables shape the output, both optional:
 
 | | |
 |---|---|
-| `AGENT_WORKSPACE` | which workspace's sessions to list. Defaults to `~/.local/share/brave-agent/workspace`; the bridge sets its own, so pass the same value the launchd plist or systemd unit uses. |
+| `AGENT_WORKSPACE` | which workspace's sessions to list. Defaults to `~/.local/share/agentic-browser/workspace`; the bridge sets its own, so pass the same value the launchd plist or systemd unit uses. |
 | `SLACK_WORKSPACE` | your Slack subdomain, so the permalinks are clickable. Without it they still open from a signed-in Slack. |
 
 `--json` prints the same rows as structured data, for piping.

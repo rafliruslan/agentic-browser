@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
  */
 export const DEFAULT_PENDING_PATH = join(
   process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'),
-  'brave-agent',
+  'agentic-browser',
   'pending.json',
 );
 

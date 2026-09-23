@@ -95,10 +95,10 @@ Ask the user to quit Brave completely, confirm with `pgrep`, then:
 
 ```bash
 # Linux
-mv ~/.config/BraveSoftware/Brave-Browser ~/.local/share/brave-profile
+mv ~/.config/BraveSoftware/Brave-Browser ~/.local/share/browser-profile
 
 # macOS
-mv ~/Library/Application\ Support/BraveSoftware/Brave-Browser ~/.local/share/brave-profile
+mv ~/Library/Application\ Support/BraveSoftware/Brave-Browser ~/.local/share/browser-profile
 ```
 
 Same filesystem, so it is instant. Cookies stay decryptable because the secret
@@ -123,7 +123,7 @@ a wrapper script or editing `.desktop` files, because every launcher inherits
 it: the desktop entry, any web-app entries, and the user's own shell.
 
 ```
---user-data-dir=/home/USER/.local/share/brave-profile
+--user-data-dir=/home/USER/.local/share/browser-profile
 --remote-debugging-port=9222
 --profile-directory=Default
 ```
@@ -154,16 +154,16 @@ A launchd agent at login, which is also what keeps the port open across reboots:
 
 ```bash
 mkdir -p ~/Library/LaunchAgents
-cat > ~/Library/LaunchAgents/com.brave-agent.browser.plist <<PLIST
+cat > ~/Library/LaunchAgents/com.agentic-browser.browser.plist <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Label</key><string>com.brave-agent.browser</string>
+    <key>Label</key><string>com.agentic-browser.browser</string>
     <key>ProgramArguments</key>
     <array>
         <string>/Applications/Brave Browser.app/Contents/MacOS/Brave Browser</string>
-        <string>--user-data-dir=$HOME/.local/share/brave-profile</string>
+        <string>--user-data-dir=$HOME/.local/share/browser-profile</string>
         <string>--remote-debugging-port=9222</string>
         <string>--profile-directory=Default</string>
     </array>
@@ -172,7 +172,7 @@ cat > ~/Library/LaunchAgents/com.brave-agent.browser.plist <<PLIST
 </dict>
 </plist>
 PLIST
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.brave-agent.browser.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agentic-browser.browser.plist
 ```
 
 `KeepAlive` is deliberately false: the user must stay able to quit their own
@@ -188,7 +188,7 @@ Then shadow the Dock launch so a cold start from anywhere still gets the flags:
 cat > ~/.local/bin/brave <<'SH'
 #!/bin/sh
 exec open -na "Brave Browser" --args \
-  --user-data-dir="$HOME/.local/share/brave-profile" \
+  --user-data-dir="$HOME/.local/share/browser-profile" \
   --remote-debugging-port=9222 \
   --profile-directory=Default
 SH
@@ -211,7 +211,7 @@ Expect JSON with `Browser` and `webSocketDebuggerUrl`. Then confirm it is the
 ```bash
 python3 -c "
 import sqlite3,shutil,os,tempfile
-src=os.path.expanduser('~/.local/share/brave-profile/Default/Cookies')
+src=os.path.expanduser('~/.local/share/browser-profile/Default/Cookies')
 t=tempfile.mktemp(); shutil.copy(src,t)
 c=sqlite3.connect(t)
 print('cookies:', c.execute('select count(*) from cookies').fetchone()[0])
@@ -226,7 +226,7 @@ A near-zero cookie count means you are looking at the wrong profile.
 ## 5b. Install the two local servers' dependencies
 
 `brave` and `devtools` come from npm at run time via `npx`. The other two,
-`brave-repl` and `memory`, are files in this plugin, and `node_modules/` is not
+`browser-repl` and `memory`, are files in this plugin, and `node_modules/` is not
 shipped inside it. Without this step they fail to start and you lose `snapshot`,
 `act`, `fetch` and the site notes, leaving only the two npx servers:
 
@@ -284,13 +284,13 @@ the user is navigating by muscle memory.
 ## 7. Confirm the MCP servers see it
 
 The plugin registers four: `brave` (Playwright) and `devtools`
-(chrome-devtools-mcp), both pointing at `127.0.0.1:9222`, plus `brave-repl` and
+(chrome-devtools-mcp), both pointing at `127.0.0.1:9222`, plus `browser-repl` and
 `memory` from this plugin's own directory. Verify with `claude mcp list`, then
-list tabs through `mcp__brave__browser_tabs` and confirm the user's real tabs
+list tabs through `mcp__browser__browser_tabs` and confirm the user's real tabs
 appear.
 
-`brave-repl` is the one worth checking separately, since it is where `snapshot`,
-`act` and `fetch` live: `mcp__brave-repl__pages` should list the same tabs.
+`browser-repl` is the one worth checking separately, since it is where `snapshot`,
+`act` and `fetch` live: `mcp__browser-repl__pages` should list the same tabs.
 
 Newly registered MCP servers do not expose their tools to an already-running
 session. If the tools are missing, the session needs restarting.
@@ -310,13 +310,13 @@ Two changes, both reversible in a minute.
 **Linux:**
 
 1. Delete the added lines from `~/.config/brave-flags.conf`.
-2. `mv ~/.local/share/brave-profile ~/.config/BraveSoftware/Brave-Browser`
+2. `mv ~/.local/share/browser-profile ~/.config/BraveSoftware/Brave-Browser`
 
 Plus, if they were added: the Hyprland `focus_on_activate` and workspace rules.
 
 **macOS:**
 
-1. `launchctl bootout gui/$(id -u)/com.brave-agent.browser` and delete
-   `~/Library/LaunchAgents/com.brave-agent.browser.plist`.
+1. `launchctl bootout gui/$(id -u)/com.agentic-browser.browser` and delete
+   `~/Library/LaunchAgents/com.agentic-browser.browser.plist`.
 2. `rm ~/.local/bin/brave`
-3. `mv ~/.local/share/brave-profile ~/Library/Application\ Support/BraveSoftware/Brave-Browser`
+3. `mv ~/.local/share/browser-profile ~/Library/Application\ Support/BraveSoftware/Brave-Browser`
