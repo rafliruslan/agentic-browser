@@ -52,7 +52,32 @@ const MCP_CONFIG =
  * acting on it. The browser half comes from the MCP config, same as the bridge,
  * so a routine drives whichever browser this machine has. See browser.mjs.
  */
-const ROUTINE_BASE = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash'];
+export const ROUTINE_BASE = ['Read', 'Write', 'Edit', 'Glob', 'Grep'];
+
+/**
+ * Taken away from routines outright, not just left off the list.
+ *
+ * Bash: a routine runs unattended, reading live logged-in pages, with nobody
+ * reading the reply before it acts. Shell on this machine is the widest thing
+ * a hijacked run could reach. Measured before removing it: the only scheduled
+ * run so far (bixgrow-payouts, 2026-09-21) made zero Bash calls - 19 browser
+ * calls, and Read, Grep, Glob and one Edit for its own log line.
+ *
+ * mcp__slack: routines are notify-only and none of them posts. A way to post
+ * as the bot is not something an unattended run should hold on the off chance.
+ *
+ * Denied rather than merely unlisted because an unlisted tool is refused only
+ * as long as nothing grants it some other way. A denial holds regardless.
+ */
+export const ROUTINE_DENIED = ['Bash', 'mcp__slack'];
+
+/** What a routine may use, and what it is refused, for a given MCP config. */
+export async function routineGrant(mcpConfig) {
+  const allowed = (await allowedTools(mcpConfig, { base: ROUTINE_BASE }))
+    .filter((t) => !ROUTINE_DENIED.includes(t));
+  const denied = [...(await deniedBrowserTools(mcpConfig)), ...ROUTINE_DENIED];
+  return { allowed, denied };
+}
 
 // The arbitrary-script tools come from deniedBrowserTools, named for whatever
 // this machine calls its browser. `Task` is not listed here because runner.mjs
@@ -272,6 +297,7 @@ async function main() {
     // what names the transcript, and without it the run would be the only kind
     // of turn the bridge cannot show you afterwards.
     const sessionId = randomUUID();
+    const grant = await routineGrant(MCP_CONFIG);
     const result = await runAgent({
       prompt: buildPrompt(name, body, meta),
       sessionId,
@@ -280,8 +306,8 @@ async function main() {
       model: meta.model || 'sonnet',
       effort: meta.effort || 'xhigh',
       mcpConfig: MCP_CONFIG,
-      allowedTools: await allowedTools(MCP_CONFIG, { base: ROUTINE_BASE }),
-      deniedTools: await deniedBrowserTools(MCP_CONFIG),
+      allowedTools: grant.allowed,
+      deniedTools: grant.denied,
       timeoutMs: TIMEOUT_MS,
       transcriptPath: transcriptPathFor(WORKSPACE, sessionId),
     });

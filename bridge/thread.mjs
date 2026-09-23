@@ -158,9 +158,9 @@ Say it once in this thread. Your reply already appears here, so do not also post
 - If teammates in this thread need a message in his voice, post that one as him, and then keep your reply to a single line saying you posted it. Do not restate its contents.
 - Posting as him into a DIFFERENT channel or thread is fine and is not a repeat.
 
-To attach a file or screenshot, use the \`channel\` skill: there is no Slack SDK
-here, so an upload is three raw API calls and the skill has them. Never claim you
-attached something you did not. Say it plainly instead.
+To attach a file or screenshot, save it in the workspace or /tmp and use
+\`mcp__slack__upload\` with this channel and thread. Never claim you attached
+something you did not. Say it plainly instead.
 If you are asked for something you cannot deliver here, say so plainly rather than leaving it out.`;
 }
 

@@ -29,6 +29,12 @@
       "args": [
         "/home/USERNAME/.local/share/agentic-browser/plugin/memory/server.mjs"
       ]
+    },
+    "slack": {
+      "command": "node",
+      "args": [
+        "/home/USERNAME/.local/share/agentic-browser/bridge/slack-mcp.mjs"
+      ]
     }
   }
 }

@@ -68,3 +68,44 @@ test('claiming keeps whatever else the routine had recorded', () => {
   assert.equal(next['price-alerts'].lastRun, '2026-09-08T00:00:00Z');
   assert.equal(next['price-alerts'].ok, true);
 });
+
+// --- what an unattended routine is allowed to hold --------------------------
+
+import { routineGrant, ROUTINE_BASE } from './routines.mjs';
+import { mkdtemp as mkdtemp2, writeFile as writeFile2 } from 'node:fs/promises';
+import { tmpdir as tmpdir2 } from 'node:os';
+import { join as join2 } from 'node:path';
+
+async function configWith(servers) {
+  const p = join2(await mkdtemp2(join2(tmpdir2(), 'grant-')), 'mcp.json');
+  await writeFile2(p, JSON.stringify({ mcpServers: servers }));
+  return p;
+}
+
+test('a routine is not granted Bash, and is refused it outright', async () => {
+  // The only scheduled run so far made zero Bash calls. Unattended runs read
+  // live pages with nobody checking before they act.
+  const { allowed, denied } = await routineGrant(await configWith({ aside: {}, memory: {} }));
+  assert.equal(allowed.includes('Bash'), false);
+  assert.ok(denied.includes('Bash'));
+  assert.equal(ROUTINE_BASE.includes('Bash'), false);
+});
+
+test('a routine cannot post to Slack even when the config offers it', async () => {
+  const { allowed, denied } = await routineGrant(await configWith({ aside: {}, memory: {}, slack: {} }));
+  assert.equal(allowed.includes('mcp__slack'), false);
+  assert.ok(denied.includes('mcp__slack'));
+});
+
+test('a routine keeps its browser and memory', async () => {
+  const { allowed } = await routineGrant(await configWith({ aside: {}, memory: {}, slack: {} }));
+  assert.ok(allowed.includes('mcp__aside'));
+  assert.ok(allowed.includes('mcp__memory'));
+  assert.ok(allowed.includes('Edit'), 'it still writes its own log line');
+});
+
+test('the arbitrary-script denials still apply to routines', async () => {
+  const { denied } = await routineGrant(await configWith({ browser: {} }));
+  assert.ok(denied.includes('mcp__browser__browser_run_code_unsafe'));
+  assert.ok(denied.includes('mcp__brave__browser_run_code_unsafe'));
+});
