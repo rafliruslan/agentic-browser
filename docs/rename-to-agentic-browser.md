@@ -58,9 +58,16 @@ while the old names still work, so nothing is ever half-migrated.
    GitHub redirects the old URL, so existing clones keep fetching, but the
    marketplace entry and the README clone line should both be updated rather
    than relying on the redirect.
-6. **Re-install the plugin.** `/plugin marketplace add rafliruslan/agentic-browser`.
-   The old plugin must be removed first or both register and the tool names
-   collide.
+6. **Re-install the plugin.** A directory-sourced marketplace points at the
+   repo path, so moving the repo leaves it `✘ failed to load: cache-miss`.
+   ```bash
+   claude plugin uninstall brave-agent@brave-agent
+   claude plugin marketplace remove brave-agent
+   claude plugin marketplace add <repo path, or rafliruslan/agentic-browser>
+   claude plugin install agentic-browser@agentic-browser
+   ```
+   Old one first, or both register and the tool names collide. Sessions
+   already open keep the old `mcp__plugin_brave-agent_*` names until restarted.
 7. **The workspace**, which is a different repo: `hammock-memory` has skills
    naming `mcp__browser__*`. They break the moment the server key changes, and
    they are what `visual-fallback` and `google-calendar` depend on.
