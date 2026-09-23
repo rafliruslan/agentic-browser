@@ -136,3 +136,13 @@ test('a run that dies instantly still records what it was asked', async () => {
   assert.equal(res.ok, false);
   assert.equal((await readFile(path, 'utf8')).includes('the ask'), true);
 });
+
+test('both spellings of the script tool are disallowed on every run', () => {
+  // Whatever the caller passes, the module list applies. A machine on the old
+  // config name must not be the one that loses the guard.
+  const args = buildArgs({ prompt: 'x', sessionId: 'a', isNew: true });
+  const denied = args[args.indexOf('--disallowedTools') + 1];
+  assert.ok(denied.includes('mcp__brave__browser_run_code_unsafe'));
+  assert.ok(denied.includes('mcp__browser__browser_run_code_unsafe'));
+  assert.ok(denied.includes('Task'));
+});

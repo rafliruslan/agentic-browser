@@ -174,3 +174,19 @@ test('no duplicates when the server really is called brave', () => {
   const got = unsafeTools({ mcpServers: { browser: {} } });
   assert.equal(got.filter((t) => t === 'mcp__browser__browser_run_code_unsafe').length, 1);
 });
+
+test('the pre-rename tool name stays denied, for machines not yet migrated', () => {
+  // The Linux box still calls its server "brave". If the denylist only knew
+  // the new spelling, arbitrary script would run there unblocked. A rename
+  // script rewrote these values once and removed exactly this protection.
+  const old = unsafeTools({ mcpServers: { brave: {} } });
+  assert.ok(old.includes('mcp__brave__browser_run_code_unsafe'));
+});
+
+test('an unreadable config denies BOTH spellings, not just the current one', () => {
+  for (const cfg of [null, {}, { mcpServers: 'nope' }]) {
+    const got = unsafeTools(cfg);
+    assert.ok(got.includes('mcp__brave__browser_run_code_unsafe'), 'pre-rename name');
+    assert.ok(got.includes('mcp__browser__browser_run_code_unsafe'), 'current name');
+  }
+});

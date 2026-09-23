@@ -98,6 +98,9 @@ const SESSION_IN_USE = /session id .* is already in use/i;
  */
 export const DENIED_TOOLS = [
   'Task',
+  // Both spellings on purpose: the pre-rename name is what an unmigrated
+  // machine still exposes. browser.mjs carries the same pair and says why.
+  'mcp__brave__browser_run_code_unsafe',
   'mcp__browser__browser_run_code_unsafe',
   'mcp__devtools__evaluate_script',
 ];

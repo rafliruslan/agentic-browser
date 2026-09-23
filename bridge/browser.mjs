@@ -118,7 +118,24 @@ export async function browserCdpUrl(path, { read = readFile } = {}) {
  */
 export const UNSAFE_SUFFIXES = ['browser_run_code_unsafe', 'evaluate_script'];
 
-const LEGACY_DENIED = ['mcp__browser__browser_run_code_unsafe', 'mcp__devtools__evaluate_script'];
+/**
+ * Names that must be denied whatever the config says, including spellings this
+ * project no longer uses.
+ *
+ * These are deliberately historical. `mcp__brave__*` is what the server was
+ * called before the rename, and a machine still on the old config - the Linux
+ * box, until it is migrated - exposes exactly that name. Dropping it because
+ * this repo moved on would leave arbitrary script running there unblocked.
+ *
+ * Do not "tidy" these to the current spelling. A rename script did precisely
+ * that once, rewriting the values and turning the one constant whose job is to
+ * outlive a rename into a duplicate of the derived list.
+ */
+const LEGACY_DENIED = [
+  'mcp__brave__browser_run_code_unsafe',
+  'mcp__browser__browser_run_code_unsafe',
+  'mcp__devtools__evaluate_script',
+];
 
 export function unsafeTools(config) {
   const names = new Set(LEGACY_DENIED);
