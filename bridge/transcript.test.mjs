@@ -181,3 +181,10 @@ test("Claude Code's copy still lists the sessions that predate ours", () => {
 test('neither directory existing is empty, not an error', () => {
   assert.equal(chooseTranscripts().size, 0);
 });
+
+test('the runs index is not a session', () => {
+  // It sits beside the transcripts and ends in .jsonl, so a plain glob listed
+  // it as a session called "index" with no task and no turns.
+  const got = chooseTranscripts({ mine: ['/ws/transcripts/index.jsonl', '/ws/transcripts/a.jsonl'] });
+  assert.deepEqual([...got.keys()], ['a']);
+});

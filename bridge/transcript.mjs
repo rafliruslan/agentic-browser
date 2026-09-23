@@ -34,6 +34,12 @@ import { sessionIdFor } from './sessions.mjs';
  */
 export function chooseTranscripts({ mine = [], theirs = [] } = {}) {
   const out = new Map();
+  // The runs index lives beside the transcripts and ends in .jsonl too, so a
+  // plain glob picked it up and listed it as a session called "index" with no
+  // task and no turns.
+  const isTranscript = (p) => basename(p, '.jsonl') !== 'index';
+  mine = mine.filter(isTranscript);
+  theirs = theirs.filter(isTranscript);
   for (const path of theirs) out.set(basename(path, '.jsonl'), { path, source: 'claude' });
   for (const path of mine) out.set(basename(path, '.jsonl'), { path, source: 'bridge' });
   return out;
