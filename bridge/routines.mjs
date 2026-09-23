@@ -52,7 +52,16 @@ const MCP_CONFIG =
  * acting on it. The browser half comes from the MCP config, same as the bridge,
  * so a routine drives whichever browser this machine has. See browser.mjs.
  */
-export const ROUTINE_BASE = ['Read', 'Write', 'Edit', 'Glob', 'Grep'];
+export const ROUTINE_BASE = [
+  'Read', 'Glob', 'Grep',
+  // Where a routine may write, and nowhere else. It runs in the "default"
+  // permission mode rather than acceptEdits, so a path not listed here is
+  // refused: verified on a scratch workspace, where memory/agent/ was refused
+  // with no rule naming it. Its own file takes the log line; episodic takes a
+  // dated note.
+  'Edit(memory/routines/**)',
+  'Edit(memory/episodic/**)',
+];
 
 /**
  * Taken away from routines outright, not just left off the list.
@@ -69,7 +78,26 @@ export const ROUTINE_BASE = ['Read', 'Write', 'Edit', 'Glob', 'Grep'];
  * Denied rather than merely unlisted because an unlisted tool is refused only
  * as long as nothing grants it some other way. A denial holds regardless.
  */
-export const ROUTINE_DENIED = ['Bash', 'mcp__slack'];
+export const ROUTINE_DENIED = [
+  'Bash',
+  'mcp__slack',
+  // The files that load as instructions in later sessions. A routine reads
+  // live pages with nobody watching, so one poisoned page written into these
+  // would become a standing order. Refused already by the allow-list above;
+  // named here as well so the guard survives the permission mode changing.
+  'Edit(skills/**)',
+  'Edit(.claude/**)',
+  'Edit(memory/sites/**)',
+  'Edit(memory/agent/**)',
+  'Edit(memory/users/**)',
+  'Edit(CLAUDE.md)',
+];
+
+/**
+ * Permission mode for routines. Not acceptEdits: that approves any edit in the
+ * workspace, which would make the path allow-list above decorative.
+ */
+export const ROUTINE_PERMISSION_MODE = 'default';
 
 /** What a routine may use, and what it is refused, for a given MCP config. */
 export async function routineGrant(mcpConfig) {
@@ -219,9 +247,10 @@ function buildPrompt(name, body, meta) {
     `1. Append ONE line to the Log section of memory/routines/${name}.md:`,
     '   the date, the outcome, nothing else. Not a paragraph.',
     '2. If you discovered something new about how the site behaves, put it in the',
-    '   "What breaks" section or the relevant memory/sites/ page, and let the log',
-    '   line just say a new failure mode was recorded. Findings buried in a run log',
-    '   are findings nobody reads.',
+    `   "What breaks" section of memory/routines/${name}.md, and let the log line`,
+    '   just say a new failure mode was recorded. Site notes, skills and the other',
+    '   memory files are read-only to a routine: if one of them is wrong, say so in',
+    '   your report so it can be fixed.',
     '3. If nothing happened, say so plainly. A quiet run is the normal case and',
     '   inventing significance is worse than reporting nothing.',
     '',
@@ -308,6 +337,7 @@ async function main() {
       mcpConfig: MCP_CONFIG,
       allowedTools: grant.allowed,
       deniedTools: grant.denied,
+      permissionMode: ROUTINE_PERMISSION_MODE,
       timeoutMs: TIMEOUT_MS,
       transcriptPath: transcriptPathFor(WORKSPACE, sessionId),
     });

@@ -146,3 +146,13 @@ test('both spellings of the script tool are disallowed on every run', () => {
   assert.ok(denied.includes('mcp__browser__browser_run_code_unsafe'));
   assert.ok(denied.includes('Task'));
 });
+
+test('every run carries the fence hook', () => {
+  // Page content, documents and other people's messages arrive fenced as
+  // data. Applied in buildArgs so no caller can leave it off.
+  const args = buildArgs({ prompt: 'x', sessionId: 'a', isNew: true });
+  const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+  const hook = settings.hooks.PostToolUse[0];
+  assert.equal(hook.matcher, 'mcp__.*');
+  assert.match(hook.hooks[0].command, /fence-hook\.mjs"$/);
+});

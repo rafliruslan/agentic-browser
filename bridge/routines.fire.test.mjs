@@ -101,11 +101,34 @@ test('a routine keeps its browser and memory', async () => {
   const { allowed } = await routineGrant(await configWith({ aside: {}, memory: {}, slack: {} }));
   assert.ok(allowed.includes('mcp__aside'));
   assert.ok(allowed.includes('mcp__memory'));
-  assert.ok(allowed.includes('Edit'), 'it still writes its own log line');
+  assert.ok(allowed.includes('Edit(memory/routines/**)'), 'it still writes its own log line');
 });
 
 test('the arbitrary-script denials still apply to routines', async () => {
   const { denied } = await routineGrant(await configWith({ browser: {} }));
   assert.ok(denied.includes('mcp__browser__browser_run_code_unsafe'));
   assert.ok(denied.includes('mcp__brave__browser_run_code_unsafe'));
+});
+
+test('a routine may write only its own records, and nothing that loads as instructions', async () => {
+  // Verified on a real run in a scratch workspace: skills/, memory/sites/ and
+  // memory/agent/ refused, memory/routines/ and memory/episodic/ written.
+  const { allowed, denied } = await routineGrant(await configWith({ aside: {} }));
+  assert.equal(allowed.includes('Edit'), false, 'no blanket edit');
+  assert.equal(allowed.includes('Write'), false, 'no blanket write');
+  for (const p of ['skills/**', '.claude/**', 'memory/sites/**', 'memory/agent/**', 'memory/users/**', 'CLAUDE.md']) {
+    assert.ok(denied.includes(`Edit(${p})`), p);
+  }
+});
+
+test('routines do not run in acceptEdits, which would override the path list', async () => {
+  const { ROUTINE_PERMISSION_MODE } = await import('./routines.mjs');
+  assert.equal(ROUTINE_PERMISSION_MODE, 'default');
+});
+
+test('the routine prompt no longer sends findings into site notes', async () => {
+  const src = await (await import('node:fs/promises')).readFile(new URL('./routines.mjs', import.meta.url), 'utf8');
+  const prompt = src.slice(src.indexOf('function buildPrompt'), src.indexOf('function buildPrompt') + 3000);
+  assert.equal(/relevant memory\/sites\/ page/.test(prompt), false);
+  assert.match(prompt, /read-only to a routine/);
 });
