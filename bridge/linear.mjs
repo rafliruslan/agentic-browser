@@ -44,6 +44,11 @@ export function buildLinearTask(event, { nonce = randomBytes(8).toString('hex') 
   const lines = [
     `Rafli called you from Linear, on ${where}.`,
     'Your reply is written back into that Linear session. Teammates read the issue too, so keep it short and plain.',
+    // Found in the first live test: a reply carried session-start output about a
+    // note holding a customer's name. Everything a Linear reply says is public to
+    // the workspace, so it stays on the issue.
+    'Answer only what he asked about this issue. The whole team reads your reply, so leave out ' +
+      'anything unrelated: memory or sync output, notes about other work, and any customer or personal data.',
     '',
     ask
       ? `His words:\n${ask}`

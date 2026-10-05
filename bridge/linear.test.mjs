@@ -30,6 +30,16 @@ test('the task puts his words outside the fence and everyone else inside it', ()
   assert.doesNotMatch(outside, /Fix login/);
 });
 
+test('the task keeps the reply on the issue and out of notes and customer data', () => {
+  for (const request of ['@hammock check this', '']) {
+    const task = buildLinearTask(event({ request }), { nonce: 'n' });
+    const before = task.slice(0, task.indexOf('[UNTRUSTED_CONTENT'));
+    assert.match(before, /Answer only what he asked about this issue/);
+    assert.match(before, /memory or sync output/);
+    assert.match(before, /customer or personal data/);
+  }
+});
+
 test('a hostile title cannot reach the instruction part of the task', () => {
   const evil = event({
     issue: {
