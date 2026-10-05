@@ -3,9 +3,12 @@
  *
  * Not a generic GraphQL proxy. Each action is a fixed query with validated
  * arguments, so a prompt-injected agent can do only what is listed here:
- * read, search, create, update, comment. No delete, no archive, no project,
- * cycle, label or workspace changes. Everything done here shows in Linear as the
- * agent (its app user), never as a person.
+ * read, search, create, update (status, priority, title, description, assignee,
+ * due date, estimate, parent), comment, apply or remove existing labels, move an
+ * issue between projects and cycles, and archive or unarchive. No delete, no new
+ * labels, projects or cycles, no workspace changes. Everything done here shows in
+ * Linear as the agent (its app user), never as a person, and a change made for a
+ * requester says whose request it was.
  *
  * Pure: `gql(query, variables)` is passed in and returns `data` or throws, so
  * node --test runs it without Linear.
@@ -319,12 +322,13 @@ export async function runAction(action, args, gql, { requester } = {}) {
       const id = issueRef(a.id);
       const issue = await resolveIssue(id, gql);
       const archive = action === 'archive_issue';
+      // Before archiving: an archived issue can no longer take a comment.
+      if (archive) await audit(issue.id, 'Archived', requester, gql);
       const m = await gql(
         archive ? 'mutation($id:String!){ issueArchive(id:$id){ success } }' : 'mutation($id:String!){ issueUnarchive(id:$id){ success } }',
         { id: issue.id },
       );
       if (!(archive ? m.issueArchive?.success : m.issueUnarchive?.success)) fail(`Linear did not ${archive ? 'archive' : 'unarchive'} the issue`);
-      // An archived issue cannot be commented on, so the note goes on first when unarchiving only.
       if (!archive) await audit(issue.id, 'Unarchived', requester, gql);
       return { id: issue.identifier, archived: archive };
     }

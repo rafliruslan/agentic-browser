@@ -206,3 +206,15 @@ test('update_issue takes dueDate, estimate and parent, and rejects bad values', 
   await assert.rejects(runAction('update_issue', { id: 'OPS-9', dueDate: 'tomorrow' }, gql), /YYYY-MM-DD/);
   await assert.rejects(runAction('update_issue', { id: 'OPS-9', estimate: -1 }, gql), /estimate must be/);
 });
+
+test('archiving leaves its note before the issue is archived, so the comment can still land', async () => {
+  const order = [];
+  const { gql } = fake({
+    'user(id:$id)': { user: { name: 'Sebastian' } },
+    'issue(id:$id){ id identifier': { issue },
+    commentCreate: () => { order.push('comment'); return { commentCreate: { success: true } }; },
+    issueArchive: () => { order.push('archive'); return { issueArchive: { success: true } }; },
+  });
+  await runAction('archive_issue', { id: 'OPS-9' }, gql, { requester: '99999999-8888-7777-6666-555555555555' });
+  assert.deepEqual(order, ['comment', 'archive']);
+});
