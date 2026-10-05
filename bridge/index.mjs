@@ -33,6 +33,7 @@ import { createSubscriptionStore, shouldHandle, isStopPhrase, canInterrupt } fro
 import { allowedTools, browserCdpUrl, deniedBrowserTools, BASE_TOOLS } from './browser.mjs';
 import { parseInterrupt } from './interrupt.mjs';
 import { createRunRegistry } from './runs.mjs';
+import { createRelayClient, createLinearHandler, startPoller, runPolicy } from './linear.mjs';
 
 const { App } = bolt;
 
@@ -557,6 +558,71 @@ async function main() {
     await handleTurn({ event, client, text: event.text });
   });
 
+  /**
+   * One turn for a Linear session, the counterpart of handleTurn for Slack.
+   *
+   * The relay already refused anyone but the operator, so there is no user
+   * check here. The key is the Linear session, so a follow-up in the same
+   * session resumes the same conversation. No Slack signals: the reply goes
+   * back through the relay as a Linear activity.
+   */
+  async function runLinearTurn({ key, task, hint }) {
+    return queue.add(key, async () => {
+      const route = pickModel(hint ?? '');
+      const existing = await sessions.get(key);
+      const sessionId = existing || (await sessions.idFor(key));
+      const isNew = !existing;
+      // Before the run, for the reason given in handleTurn.
+      if (isNew) await sessions.set(key, sessionId);
+
+      if (cdpUrl) {
+        try {
+          await healBrowser({ cdpUrl });
+        } catch (err) {
+          console.warn(`[browser-health] preflight failed, continuing: ${err.message}`);
+        }
+      }
+
+      const note = identityNote(IDENTITY);
+      const withNote = note ? `${task}\n\n---\n\n${note}` : task;
+      // No confirmed words from him means the brief is other people's text, so
+      // the turn gets no tools. See runPolicy.
+      const policy = runPolicy(hint, ALLOWED_TOOLS, MCP_CONFIG);
+      const attempt = (id, fresh, prompt) =>
+        runAgent({
+          prompt,
+          sessionId: id,
+          isNew: fresh,
+          cwd: WORKSPACE,
+          model: route.model,
+          effort: route.effort,
+          permissionMode: policy.permissionMode,
+          mcpConfig: policy.mcpConfig,
+          allowedTools: policy.allowedTools,
+          deniedTools: [...DENIED, ...(policy.deniedTools || [])],
+          transcriptPath: transcriptPathFor(WORKSPACE, id),
+          onSpawn: (child) => runs.track(key, child),
+        });
+
+      console.log(`[linear] ${key} -> ${route.model}/${route.effort} (${route.reason})${policy.cautious ? ', no tools' : ''}`);
+      let result = await attempt(sessionId, isNew, isNew ? PERSONA + withNote : withNote);
+      if (!result.ok && result.sessionInUse) {
+        await sessions.set(key, sessionId);
+        result = await attempt(sessionId, false, withNote);
+      }
+      if (!result.ok && result.deadSession && !isNew) {
+        await sessions.forget(key);
+        const freshId = await sessions.idFor(key);
+        result = await attempt(freshId, true, PERSONA + withNote);
+        if (result.ok) await sessions.set(key, freshId);
+      } else if (result.ok) {
+        await sessions.set(key, result.sessionId || sessionId);
+      }
+      if (runs.takeStopped(key)) return { stopped: true };
+      return result;
+    });
+  }
+
   // Refuse to become a second answering bridge. Slack fans app_mention out to
   // every Socket Mode connection, so a duplicate does not error, it just makes
   // the agent look like it contradicts itself.
@@ -585,6 +651,23 @@ async function main() {
   await app.start();
   console.log(`[agent] connected as ${auth.user} (${botUserId}) in ${auth.team}`);
   console.log(`[agent] workspace ${WORKSPACE}, concurrency ${concurrency}, channels ${ALLOWED_CHANNEL || '*'}`);
+
+  // Linear, when the env names a relay. After the lock, so a refused duplicate
+  // bridge never polls and never answers an event twice.
+  const { LINEAR_RELAY_URL, LINEAR_RELAY_TOKEN, LINEAR_AGENT } = env;
+  if (LINEAR_RELAY_URL && LINEAR_RELAY_TOKEN && LINEAR_AGENT) {
+    const relay = createRelayClient({ url: LINEAR_RELAY_URL, token: LINEAR_RELAY_TOKEN });
+    const handle = createLinearHandler({
+      client: relay,
+      agent: LINEAR_AGENT,
+      runTurn: runLinearTurn,
+      // Marks the run stopped only if one is live, or the next real run would
+      // have its answer swallowed.
+      stopTurn: (key) => runs.isRunning(key) && runs.stop(key),
+    });
+    startPoller({ pull: () => relay.pull(LINEAR_AGENT), handle });
+    console.log(`[linear] polling ${LINEAR_RELAY_URL} as ${LINEAR_AGENT}`);
+  }
 }
 
 main().catch((err) => {

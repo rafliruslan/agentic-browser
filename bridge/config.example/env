@@ -21,3 +21,10 @@ ALLOWED_CHANNEL=*
 # Concurrent runs open their own tabs and do not interfere; the cap is about
 # memory and rate limits, not correctness.
 MAX_CONCURRENT=3
+
+# Optional. Linear as a second front door; see ../linear-relay/README.md.
+# All three, or none. LINEAR_AGENT is hammock or tara, the name the relay knows
+# this bridge by. The token is the relay's PULL_TOKEN for that agent.
+LINEAR_RELAY_URL=
+LINEAR_RELAY_TOKEN=
+LINEAR_AGENT=
