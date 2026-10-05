@@ -22,7 +22,9 @@ import { createQueue } from './queue.mjs';
 import { fetchThreadContext, composeTask, locationNote } from './thread.mjs';
 import { parseMention, formatResult } from './text.mjs';
 import { buildBlocks } from './blocks.mjs';
+import { spawn } from 'node:child_process';
 import { runAgent } from './runner.mjs';
+import { createRoles, gateUserFor, requesterEnv, roleNote, TEAM, TEAM_DENIED_TOOLS } from './roles.mjs';
 import { transcriptPathFor } from './mirror.mjs';
 import { readIdentity, identityNote } from './identity.mjs';
 import { healBrowser } from './browser-health.mjs';
@@ -181,7 +183,7 @@ function toLegacyResult(r) {
 
 async function main() {
   const env = await loadEnv();
-  const { SLACK_BOT_TOKEN, SLACK_APP_TOKEN, ALLOWED_USER, ALLOWED_CHANNEL, MAX_CONCURRENT } = env;
+  const { SLACK_BOT_TOKEN, SLACK_APP_TOKEN, ALLOWED_USER, ALLOWED_CHANNEL, MAX_CONCURRENT, TEAM_USERS, TEAM_CHANNELS } = env;
 
   const concurrency = Number.parseInt(MAX_CONCURRENT, 10) > 0
     ? Number.parseInt(MAX_CONCURRENT, 10)
@@ -193,6 +195,8 @@ async function main() {
   if (!ALLOWED_USER) {
     throw new Error(`ALLOWED_USER must be set in ${ENV_PATH}; it is the only access control`);
   }
+  // The operator, plus optional teammates in listed channels only. See roles.mjs.
+  const roles = createRoles({ operator: ALLOWED_USER, teamUsers: TEAM_USERS, teamChannels: TEAM_CHANNELS });
 
   // Which browser is attached, read once. A warning rather than a throw: losing
   // the browser should not cost you the channel you would use to ask about it.
@@ -281,7 +285,7 @@ async function main() {
     // after the agent has replied, so during the run you want to stop it is
     // not subscribed yet and shouldHandle drops the message. canInterrupt
     // keeps every other check, including who is allowed to drive the agent.
-    if (canInterrupt(event, { botUserId, allowedUser: ALLOWED_USER })
+    if (canInterrupt(event, { botUserId, allowedUser: gateUserFor(roles, event, ALLOWED_USER) })
         && await handleInterrupt({ event, client, text: event.text })) {
       return;
     }
@@ -291,7 +295,7 @@ async function main() {
     // disk read per message to compute a value nobody uses is the kind of cost
     // that only shows up in a busy workspace.
     const subscribed = MENTION_ONLY ? false : await subscriptions.isSubscribed(event.thread_ts);
-    if (!shouldHandle(event, { botUserId, allowedUser: ALLOWED_USER, subscribed, mentionOnly: MENTION_ONLY })) return;
+    if (!shouldHandle(event, { botUserId, allowedUser: gateUserFor(roles, event, ALLOWED_USER), subscribed, mentionOnly: MENTION_ONLY })) return;
     if (isStopPhrase(event.text)) {
       await subscriptions.unsubscribe(event.thread_ts);
       await react(client, { channel: event.channel, ts: event.ts, name: 'wave', logger: console });
@@ -322,6 +326,17 @@ async function main() {
     const threadTs = event.thread_ts || event.ts;
     // Read before stopping: the handle goes away with the run.
     const startedBy = runs.startedBy(threadTs);
+    // A teammate may stop or steer only a run they started. The operator may
+    // end any run.
+    const sender = roles.roleOf(event.user, event.channel);
+    if (sender === TEAM && startedBy && startedBy.user !== event.user) {
+      await client.chat.postMessage({
+        channel: event.channel,
+        thread_ts: threadTs,
+        text: 'Only the person who started this run, or Rafli, can stop or steer it.',
+      });
+      return true;
+    }
     const stopped = runs.stop(threadTs);
 
     // Clear the progress signals the run set, by the same calls a normal finish
@@ -358,7 +373,8 @@ async function main() {
   async function handleTurn({ event, client, text }) {
     // The whole access control. Anyone else in the channel is ignored in
     // silence: replying would tell an unauthorised user the bot is listening.
-    if (event.user !== ALLOWED_USER) {
+    const role = roles.roleOf(event.user, event.channel);
+    if (!role) {
       console.log(`[agent] ignored mention from ${event.user}`);
       return;
     }
@@ -374,6 +390,13 @@ async function main() {
     // never handed "deep:" as part of the task.
     const route = pickModel(mentioned);
     const prompt = stripDirective(mentioned);
+    // A teammate gets a conversation of their own in the thread. Sharing the
+    // operator's would hand them whatever he asked for earlier in it.
+    const sessionKey = role === TEAM ? `${threadTs}:team:${event.user}` : threadTs;
+    // A teammate's turn refuses more tools, and its hooks are told who is asking.
+    const turnDenied = role === TEAM ? [...DENIED, ...TEAM_DENIED_TOOLS] : DENIED;
+    const spawnForTurn = (bin, args, opts) =>
+      spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, event.user) } });
 
     await queue.add(threadTs, async () => {
       let ok = false;
@@ -398,17 +421,19 @@ async function main() {
           threadTs,
           botUserId,
           skipTs: event.ts,
-          allowedUser: ALLOWED_USER,
+          // On a teammate's turn the requester is the user, so their own earlier
+          // messages in the thread read as theirs and the operator's as someone else's.
+          allowedUser: role === TEAM ? event.user : ALLOWED_USER,
         });
 
-        const existing = await sessions.get(threadTs);
-        const sessionId = existing || (await sessions.idFor(threadTs));
+        const existing = await sessions.get(sessionKey);
+        const sessionId = existing || (await sessions.idFor(sessionKey));
         const isNew = !existing;
 
         const task = composeTask(prompt, threadContext);
         // Who she is browsing as, before what she is being asked. An empty
         // string when unknown, so nothing is claimed that is not known.
-        const note = [identityNote(IDENTITY), locationNote({ channel, threadTs })]
+        const note = [roleNote(role, event.user), identityNote(IDENTITY), locationNote({ channel, threadTs })]
           .filter(Boolean)
           .join('\n\n');
         // Persona on a thread's first turn only. After that it lives in the
@@ -429,7 +454,7 @@ async function main() {
         //
         // If the spawn fails outright no session exists, and the next run's
         // `--resume` reports it gone, which the dead-session path below handles.
-        if (isNew) await sessions.set(threadTs, sessionId);
+        if (isNew) await sessions.set(sessionKey, sessionId);
 
         // Clear any target that has stopped answering CDP before handing over.
         //
@@ -457,16 +482,17 @@ async function main() {
           effort: route.effort,
           mcpConfig: MCP_CONFIG,
           allowedTools: ALLOWED_TOOLS,
-          deniedTools: DENIED,
+          deniedTools: turnDenied,
+          spawnFn: spawnForTurn,
           transcriptPath: transcriptPathFor(WORKSPACE, sessionId),
-          onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts }),
+          onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts, user: event.user, role }),
         });
 
         // Belt and braces for the same failure arriving another way: if the id
         // is taken, the session exists and we should have resumed it.
         if (!result.ok && result.sessionInUse) {
           console.log(`[agent] ${sessionId} already exists; resuming instead`);
-          await sessions.set(threadTs, sessionId);
+          await sessions.set(sessionKey, sessionId);
           result = await runAgent({
             prompt: task + '\n\n---\n\n' + note,
             sessionId,
@@ -476,9 +502,10 @@ async function main() {
             effort: route.effort,
             mcpConfig: MCP_CONFIG,
             allowedTools: ALLOWED_TOOLS,
-            deniedTools: DENIED,
+            deniedTools: turnDenied,
+            spawnFn: spawnForTurn,
             transcriptPath: transcriptPathFor(WORKSPACE, sessionId),
-            onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts }),
+            onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts, user: event.user, role }),
           });
         }
 
@@ -486,8 +513,8 @@ async function main() {
         // silently retry in a fresh one rather than showing the user an error.
         if (!result.ok && result.deadSession && !isNew) {
           console.log(`[agent] session ${sessionId} is gone; restarting thread ${threadTs}`);
-          await sessions.forget(threadTs);
-          const freshId = await sessions.idFor(threadTs);
+          await sessions.forget(sessionKey);
+          const freshId = await sessions.idFor(sessionKey);
           result = await runAgent({
             prompt: PERSONA + task + '\n\n---\n\n' + note,
             sessionId: freshId,
@@ -497,13 +524,14 @@ async function main() {
             effort: route.effort,
             mcpConfig: MCP_CONFIG,
             allowedTools: ALLOWED_TOOLS,
-            deniedTools: DENIED,
+            deniedTools: turnDenied,
+            spawnFn: spawnForTurn,
             transcriptPath: transcriptPathFor(WORKSPACE, freshId),
-            onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts }),
+            onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts, user: event.user, role }),
           });
-          if (result.ok) await sessions.set(threadTs, freshId);
+          if (result.ok) await sessions.set(sessionKey, freshId);
         } else if (result.ok) {
-          await sessions.set(threadTs, result.sessionId || sessionId);
+          await sessions.set(sessionKey, result.sessionId || sessionId);
         }
 
         if (result.denials?.length) {
@@ -554,6 +582,12 @@ async function main() {
   }
 
   app.event('app_mention', async ({ event, client }) => {
+    // Before handleInterrupt, which has no user check of its own: anyone able to
+    // tag her could otherwise end a run with `!stop`.
+    if (!roles.roleOf(event.user, event.channel)) {
+      console.log(`[agent] ignored mention from ${event.user}`);
+      return;
+    }
     if (await handleInterrupt({ event, client, text: event.text })) return;
     await handleTurn({ event, client, text: event.text });
   });
@@ -651,6 +685,7 @@ async function main() {
   await app.start();
   console.log(`[agent] connected as ${auth.user} (${botUserId}) in ${auth.team}`);
   console.log(`[agent] workspace ${WORKSPACE}, concurrency ${concurrency}, channels ${ALLOWED_CHANNEL || '*'}`);
+  console.log(roles.teamEnabled ? `[agent] team access on: ${roles.counts.users} user(s) in ${roles.counts.channels} channel(s)` : '[agent] team access off: operator only');
 
   // Linear, when the env names a relay. After the lock, so a refused duplicate
   // bridge never polls and never answers an event twice.
