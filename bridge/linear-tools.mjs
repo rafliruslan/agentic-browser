@@ -97,7 +97,9 @@ export async function callTool(name, args, ctx) {
     res = await fetchFn(`${String(relayUrl).replace(/\/+$/, '')}/linear/${agent}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ action: name, args: args || {} }),
+      // The requester comes from the bridge's environment, never from the agent's
+      // arguments, so the agent cannot name someone else.
+      body: JSON.stringify({ action: name, args: args || {}, ...(ctx.requester ? { requester: ctx.requester } : {}) }),
     });
   } catch {
     // No detail: a network error string can carry the URL.

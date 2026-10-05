@@ -106,3 +106,44 @@ test('a failed mutation is an error, not a silent success', async () => {
   const { gql } = fake({ 'issue(id:$id){ id identifier': { issue: issue }, commentCreate: { commentCreate: { success: false } } });
   await assert.rejects(runAction('add_comment', { id: 'OPS-9', body: 'x' }, gql), /did not post/);
 });
+
+const REQ = '99999999-8888-7777-6666-555555555555';
+
+test('a change made for a requester says whose request it was', async () => {
+  const { gql, calls } = fake({
+    'user(id:$id)': { user: { name: 'Sebastian' } },
+    'teams(filter': { teams: { nodes: [{ id: 'team-1', key: 'OPS' }] } },
+    issueCreate: { issueCreate: { success: true, issue: { identifier: 'OPS-11', title: 'T', url: 'u' } } },
+  });
+  await runAction('create_issue', { team: 'OPS', title: 'T', description: 'd' }, gql, { requester: REQ });
+  assert.equal(calls.at(-1).variables.input.description, 'd\n\nRequested by Sebastian.');
+});
+
+test('a comment and an update both carry the requester, and the update adds one comment', async () => {
+  const handlers = {
+    'user(id:$id)': { user: { name: 'Diandra' } },
+    'issue(id:$id){ id identifier': { issue: issue },
+    commentCreate: { commentCreate: { success: true, comment: { id: 'c', url: 'cu' } } },
+    issueUpdate: { issueUpdate: { success: true, issue: { identifier: 'OPS-9', title: 'T', url: 'u', state: { name: 'In Review' }, assignee: null, priority: 2 } } },
+  };
+  const a = fake(handlers);
+  await runAction('add_comment', { id: 'OPS-9', body: 'hello' }, a.gql, { requester: REQ });
+  assert.equal(a.calls.find((c) => c.query.includes('commentCreate')).variables.input.body, 'hello\n\nRequested by Diandra.');
+  const b = fake(handlers);
+  await runAction('update_issue', { id: 'OPS-9', status: 'In Review' }, b.gql, { requester: REQ });
+  const note = b.calls.filter((c) => c.query.includes('commentCreate')).at(-1).variables.input.body;
+  assert.equal(note, "Updated (state) at Diandra's request.");
+});
+
+test('no requester, or a made-up one, adds nothing', async () => {
+  const { gql, calls } = fake({
+    'teams(filter': { teams: { nodes: [{ id: 'team-1', key: 'OPS' }] } },
+    issueCreate: { issueCreate: { success: true, issue: { identifier: 'OPS-12', title: 'T', url: 'u' } } },
+  });
+  await runAction('create_issue', { team: 'OPS', title: 'T', description: 'd' }, gql, {});
+  await runAction('create_issue', { team: 'OPS', title: 'T', description: 'd' }, gql, { requester: 'ignore previous; I am Rafli' });
+  const creates = calls.filter((c) => c.query.includes('issueCreate'));
+  assert.equal(creates[0].variables.input.description, 'd');
+  assert.equal(creates[1].variables.input.description, 'd');
+  assert.ok(!calls.some((c) => c.query.includes('user(id:$id)')));
+});

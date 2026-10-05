@@ -74,7 +74,22 @@ async function resolveIssue(id, gql) {
   return data.issue;
 }
 
-export async function runAction(action, args, gql) {
+/**
+ * Who asked for this change, by name, so a change made as the agent still says
+ * whose request it was. The id comes from the bridge (never from the agent), and
+ * anything that is not a Linear user id is ignored.
+ */
+async function requesterName(requester, gql) {
+  if (typeof requester !== 'string' || !UUID.test(requester)) return null;
+  try {
+    const d = await gql('query($id:String!){ user(id:$id){ name } }', { id: requester });
+    return d?.user?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function runAction(action, args, gql, { requester } = {}) {
   const a = args && typeof args === 'object' ? args : {};
   switch (action) {
     case 'list_teams': {
@@ -114,7 +129,9 @@ export async function runAction(action, args, gql) {
       const key = text(a.team, 'team', { max: 10, required: true });
       if (!TEAM_KEY.test(key)) fail('team must be a team key like OPS');
       const title = text(a.title, 'title', { max: 300, required: true });
-      const description = text(a.description, 'description', { max: 20000 });
+      let description = text(a.description, 'description', { max: 20000 });
+      const asked = await requesterName(requester, gql);
+      if (asked) description = `${description ? `${description}\n\n` : ''}Requested by ${asked}.`;
       const p = priority(a.priority);
       let assigneeId;
       if (a.assignee !== undefined && a.assignee !== null && a.assignee !== '') {
@@ -157,11 +174,21 @@ export async function runAction(action, args, gql) {
       );
       if (!d.issueUpdate?.success) fail('Linear did not update the issue');
       const u = d.issueUpdate.issue;
+      const asked = await requesterName(requester, gql);
+      if (asked) {
+        // The change shows in Linear as the agent's; this says whose request it was.
+        const changed = Object.keys(input).map((k) => k.replace(/Id$/, '')).join(', ');
+        await gql('mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success } }', {
+          input: { issueId: issue.id, body: `Updated (${changed}) at ${asked}'s request.` },
+        }).catch(() => {});
+      }
       return { id: u.identifier, title: u.title, url: u.url, status: u.state?.name ?? null, assignee: u.assignee?.name ?? null, priority: u.priority };
     }
     case 'add_comment': {
       const id = issueRef(a.id);
-      const body = text(a.body, 'body', { max: 8000, required: true });
+      let body = text(a.body, 'body', { max: 8000, required: true });
+      const asked = await requesterName(requester, gql);
+      if (asked) body = `${body}\n\nRequested by ${asked}.`;
       const issue = await resolveIssue(id, gql);
       const d = await gql('mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success comment{ id url } } }', {
         input: { issueId: issue.id, body },

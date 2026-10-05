@@ -47,3 +47,13 @@ test('a non-JSON reply falls back to the status line', async () => {
   const out = await callTool('list_teams', {}, ctx(async () => ({ ok: false, status: 502, json: async () => { throw new Error('html'); } })));
   assert.match(out.content[0].text, /502/);
 });
+
+test('the requester goes to the relay from the context, and cannot come from the arguments', async () => {
+  let sent;
+  await callTool('add_comment', { id: 'OPS-1', body: 'x', requester: 'someone-else' }, { ...ctx(async (u, init) => { sent = JSON.parse(init.body); return { ok: true, json: async () => ({ ok: true, result: {} }) }; }), requester: 'real-id' });
+  assert.equal(sent.requester, 'real-id');
+  assert.equal(sent.args.requester, 'someone-else');
+  let none;
+  await callTool('list_teams', {}, ctx(async (u, init) => { none = JSON.parse(init.body); return { ok: true, json: async () => ({ ok: true, result: [] }) }; }));
+  assert.equal('requester' in none, false);
+});

@@ -22,7 +22,8 @@ if (!env.LINEAR_RELAY_URL || !env.LINEAR_RELAY_TOKEN || !env.LINEAR_AGENT) {
   console.error(`linear-mcp: LINEAR_RELAY_URL, LINEAR_RELAY_TOKEN and LINEAR_AGENT must be set in ${ENV_PATH}`);
   process.exit(1);
 }
-const ctx = { relayUrl: env.LINEAR_RELAY_URL, token: env.LINEAR_RELAY_TOKEN, agent: env.LINEAR_AGENT };
+// Set by the bridge on a teammate's turn; empty on the operator's.
+const ctx = { relayUrl: env.LINEAR_RELAY_URL, token: env.LINEAR_RELAY_TOKEN, agent: env.LINEAR_AGENT, requester: process.env.AGENT_REQUESTER_ID || undefined };
 
 const server = new Server({ name: 'linear', version: '0.1.0' }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));

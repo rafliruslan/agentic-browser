@@ -106,7 +106,7 @@ async function linearAction(request, env, agent) {
     return json(400, { error: 'not json' });
   }
   try {
-    const result = await runAction(body?.action, body?.args, gqlFor(env, agent));
+    const result = await runAction(body?.action, body?.args, gqlFor(env, agent), { requester: body?.requester });
     return json(200, { ok: true, result });
   } catch (err) {
     if (err instanceof ActionError) return json(400, { ok: false, error: err.message });
