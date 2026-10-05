@@ -310,3 +310,21 @@ test('a teammate stop signal looks only at the teammate\'s own run', async () =>
   await handle(teamEvent({ signal: 'stop', request: '' }));
   assert.deepEqual(keys, [`linear:sess-1:team:${MATE}`]);
 });
+
+test('an event handed over twice runs once', async () => {
+  let runs = 0;
+  const handle = createLinearHandler({
+    client: { activity: async () => {} },
+    agent: 'tara',
+    runTurn: async () => { runs += 1; return { ok: true, text: 'done' }; },
+    stopTurn: () => false,
+    log: quiet,
+  });
+  await handle(event({ id: 'e-1' }));
+  await handle(event({ id: 'e-1' }));
+  await handle(event({ id: 'e-2' }));
+  await handle(event());
+  await handle(event());
+  // e-1 once, e-2 once, and two events with no id are never treated as repeats.
+  assert.equal(runs, 4);
+});

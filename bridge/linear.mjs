@@ -146,7 +146,18 @@ export function createRelayClient({ url, token, fetchFn = fetch }) {
  * so a follow-up in the same session resumes the same conversation.
  */
 export function createLinearHandler({ client, agent, runTurn, stopTurn, log = console }) {
+  // KV is eventually consistent, so the relay can occasionally hand over an event
+  // twice. Remember the ids it gave and skip a repeat: a mention must not run twice.
+  const seen = new Set();
   return async function handle(event) {
+    if (event.id) {
+      if (seen.has(event.id)) {
+        log.warn?.(`[linear] skipped a repeated event ${event.id}`);
+        return;
+      }
+      seen.add(event.id);
+      if (seen.size > 500) seen.delete(seen.values().next().value);
+    }
     const say = (type, body) =>
       client
         .activity(agent, { agentSessionId: event.sessionId, type, body })
