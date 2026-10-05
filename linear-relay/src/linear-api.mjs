@@ -19,6 +19,14 @@ export const ACTIONS = [
   'create_issue',
   'update_issue',
   'add_comment',
+  'list_labels',
+  'set_labels',
+  'list_projects',
+  'set_project',
+  'list_cycles',
+  'set_cycle',
+  'archive_issue',
+  'unarchive_issue',
 ];
 
 const IDENTIFIER = /^[A-Za-z][A-Za-z0-9]{0,9}-\d{1,9}$/;
@@ -88,6 +96,24 @@ async function requesterName(requester, gql) {
     return null;
   }
 }
+
+/** Leave a note saying whose request a change was, when the bridge told us. */
+async function audit(issueId, what, requester, gql) {
+  const asked = await requesterName(requester, gql);
+  if (!asked) return;
+  await gql('mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success } }', {
+    input: { issueId, body: `${what} at ${asked}'s request.` },
+  }).catch(() => {});
+}
+
+function nameList(v, label) {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || v.length > 20) fail(`${label} must be a list of up to 20 names`);
+  return v.map((n) => text(n, label, { max: 60, required: true }));
+}
+
+const issueUpdateById = (id, input) =>
+  ['mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id, input:$input){ success issue{ identifier } } }', { id, input }];
 
 export async function runAction(action, args, gql, { requester } = {}) {
   const a = args && typeof args === 'object' ? args : {};
@@ -167,7 +193,21 @@ export async function runAction(action, args, gql, { requester } = {}) {
         else if (UUID.test(String(a.assignee))) input.assigneeId = a.assignee;
         else fail('assignee must be a user id from list_users, or "none"');
       }
-      if (Object.keys(input).length === 0) fail('Nothing to change: give status, priority, title, description or assignee');
+      const due = text(a.dueDate, 'dueDate', { max: 10 });
+      if (due) {
+        if (due === 'none') input.dueDate = null;
+        else if (/^\d{4}-\d{2}-\d{2}$/.test(due)) input.dueDate = due;
+        else fail('dueDate must be YYYY-MM-DD, or "none"');
+      }
+      if (a.estimate !== undefined && a.estimate !== null) {
+        if (!Number.isInteger(a.estimate) || a.estimate < 0 || a.estimate > 100) fail('estimate must be a whole number from 0 to 100');
+        input.estimate = a.estimate;
+      }
+      if (a.parent !== undefined && a.parent !== null && a.parent !== '') {
+        if (a.parent === 'none') input.parentId = null;
+        else input.parentId = (await resolveIssue(issueRef(a.parent), gql)).id;
+      }
+      if (Object.keys(input).length === 0) fail('Nothing to change: give status, priority, title, description, assignee, dueDate, estimate or parent');
       const d = await gql(
         'mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id, input:$input){ success issue{ identifier title url state{ name } assignee{ name } priority } } }',
         { id: issue.id, input },
@@ -195,6 +235,98 @@ export async function runAction(action, args, gql, { requester } = {}) {
       });
       if (!d.commentCreate?.success) fail('Linear did not post the comment');
       return { posted: true, issue: issue.identifier, url: d.commentCreate.comment?.url ?? issue.url };
+    }
+    case 'list_labels': {
+      const d = await gql('query{ issueLabels(first:250){ nodes{ name team{ key } } } }', {});
+      const key = a.team ? text(a.team, 'team', { max: 10 }).toUpperCase() : null;
+      return d.issueLabels.nodes
+        .filter((l) => !key || !l.team || l.team.key === key)
+        .map((l) => ({ name: l.name, team: l.team?.key ?? 'workspace' }));
+    }
+    case 'set_labels': {
+      const id = issueRef(a.id);
+      const add = nameList(a.add, 'add');
+      const remove = nameList(a.remove, 'remove');
+      if (!add.length && !remove.length) fail('Give add and/or remove, as lists of existing label names');
+      const d = await gql(
+        'query($id:String!){ issue(id:$id){ id identifier team{ key } labels{ nodes{ id name } } } issueLabels(first:250){ nodes{ id name team{ key } } } }',
+        { id },
+      );
+      if (!d?.issue) fail(`No issue ${id}`);
+      const pool = d.issueLabels.nodes.filter((l) => !l.team || l.team.key === d.issue.team.key);
+      const byName = new Map(pool.map((l) => [l.name.toLowerCase(), l]));
+      const find = (n) => byName.get(n.toLowerCase()) ?? fail(`No label "${n}" for ${d.issue.team.key}. Options: ${pool.map((l) => l.name).join(', ')}`);
+      const current = new Map(d.issue.labels.nodes.map((l) => [l.id, l.name]));
+      for (const n of add) { const l = find(n); current.set(l.id, l.name); }
+      for (const n of remove) current.delete(find(n).id);
+      const m = await gql(...issueUpdateById(d.issue.id, { labelIds: [...current.keys()] }));
+      if (!m.issueUpdate?.success) fail('Linear did not update the labels');
+      await audit(d.issue.id, `Labels set to ${[...current.values()].join(', ') || 'none'}`, requester, gql);
+      return { id: d.issue.identifier, labels: [...current.values()] };
+    }
+    case 'list_projects': {
+      const d = await gql('query{ projects(first:100){ nodes{ name state } } }', {});
+      return d.projects.nodes;
+    }
+    case 'set_project': {
+      const id = issueRef(a.id);
+      const wanted = text(a.project, 'project', { max: 120, required: true });
+      const issue = await resolveIssue(id, gql);
+      let projectId = null;
+      if (wanted !== 'none') {
+        const d = await gql('query{ projects(first:100){ nodes{ id name } } }', {});
+        const hit = d.projects.nodes.find((p) => p.name.toLowerCase() === wanted.toLowerCase());
+        if (!hit) fail(`No project "${wanted}". Options: ${d.projects.nodes.map((p) => p.name).join(', ')}`);
+        projectId = hit.id;
+      }
+      const m = await gql(...issueUpdateById(issue.id, { projectId }));
+      if (!m.issueUpdate?.success) fail('Linear did not move the issue');
+      await audit(issue.id, `Project set to ${wanted}`, requester, gql);
+      return { id: issue.identifier, project: wanted };
+    }
+    case 'list_cycles': {
+      const key = text(a.team, 'team', { max: 10, required: true });
+      if (!TEAM_KEY.test(key)) fail('team must be a team key like OPS');
+      const d = await gql(
+        'query($k:String!){ cycles(first:12, filter:{ team:{ key:{ eq:$k } } }){ nodes{ number name startsAt endsAt isActive } } }',
+        { k: key.toUpperCase() },
+      );
+      return d.cycles.nodes;
+    }
+    case 'set_cycle': {
+      const id = issueRef(a.id);
+      const issue = await resolveIssue(id, gql);
+      let cycleId = null;
+      let label = 'none';
+      if (a.cycle !== 'none') {
+        if (!Number.isInteger(a.cycle) || a.cycle < 1) fail('cycle must be a cycle number from list_cycles, or "none"');
+        const d = await gql(
+          'query($k:String!,$n:Float!){ cycles(first:1, filter:{ team:{ key:{ eq:$k } }, number:{ eq:$n } }){ nodes{ id number } } }',
+          { k: issue.team.key, n: a.cycle },
+        );
+        const hit = d.cycles.nodes[0];
+        if (!hit) fail(`No cycle ${a.cycle} in ${issue.team.key}`);
+        cycleId = hit.id;
+        label = String(hit.number);
+      }
+      const m = await gql(...issueUpdateById(issue.id, { cycleId }));
+      if (!m.issueUpdate?.success) fail('Linear did not move the issue');
+      await audit(issue.id, `Cycle set to ${label}`, requester, gql);
+      return { id: issue.identifier, cycle: label };
+    }
+    case 'archive_issue':
+    case 'unarchive_issue': {
+      const id = issueRef(a.id);
+      const issue = await resolveIssue(id, gql);
+      const archive = action === 'archive_issue';
+      const m = await gql(
+        archive ? 'mutation($id:String!){ issueArchive(id:$id){ success } }' : 'mutation($id:String!){ issueUnarchive(id:$id){ success } }',
+        { id: issue.id },
+      );
+      if (!(archive ? m.issueArchive?.success : m.issueUnarchive?.success)) fail(`Linear did not ${archive ? 'archive' : 'unarchive'} the issue`);
+      // An archived issue cannot be commented on, so the note goes on first when unarchiving only.
+      if (!archive) await audit(issue.id, 'Unarchived', requester, gql);
+      return { id: issue.identifier, archived: archive };
     }
     default:
       fail(`Unknown action ${String(action).slice(0, 40)}. Known: ${ACTIONS.join(', ')}`);

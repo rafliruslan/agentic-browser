@@ -5,9 +5,9 @@ import { TOOLS, callTool } from './linear-tools.mjs';
 const ctx = (fetchFn) => ({ relayUrl: 'https://relay.example/', token: 'tok', agent: 'tara', fetchFn });
 
 test('the toolset is exactly the allowlisted actions, each with a schema', () => {
-  assert.deepEqual(TOOLS.map((t) => t.name), ['list_teams', 'list_users', 'search_issues', 'get_issue', 'create_issue', 'update_issue', 'add_comment']);
+  assert.deepEqual(TOOLS.map((t) => t.name).sort(), ['add_comment', 'archive_issue', 'create_issue', 'get_issue', 'list_cycles', 'list_labels', 'list_projects', 'list_teams', 'list_users', 'search_issues', 'set_cycle', 'set_labels', 'set_project', 'unarchive_issue', 'update_issue']);
   for (const t of TOOLS) assert.equal(t.inputSchema.type, 'object');
-  assert.ok(!TOOLS.some((t) => /delete|archive/i.test(t.name)));
+  assert.ok(!TOOLS.some((t) => /delete|destroy|remove/i.test(t.name)));
 });
 
 test('a call goes to the relay as that agent, with the bearer, and returns the result as text', async () => {

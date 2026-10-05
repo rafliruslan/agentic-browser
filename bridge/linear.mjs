@@ -50,8 +50,8 @@ export function buildLinearTask(event, { nonce = randomBytes(8).toString('hex'),
     ...(team ? [roleNote(TEAM, actor, 'Linear')] : []),
     // Only said when the tools are really attached to this turn.
     ...(team && linearTools && ask
-      ? ['You have Linear tools (get_issue, search_issues, list_users, list_teams, create_issue, update_issue, add_comment). They act as you, the agent, never as a person. ' +
-         'Use them only for what they asked: one change at a time, say what you changed with the issue id, and leave every other issue alone. You cannot delete or archive.']
+      ? ['You have Linear tools (get_issue, search_issues, create_issue, update_issue, add_comment, set_labels, set_project, set_cycle, archive_issue, and list_ helpers). They act as you, the agent, never as a person. ' +
+         'Use them only for what they asked: one change at a time, say what you changed with the issue id, and leave every other issue alone. You cannot delete anything.']
       : []),
     'Your reply is written back into that Linear session. Teammates read the issue too, so keep it short and plain.',
     // Found in the first live test: a reply carried session-start output about a

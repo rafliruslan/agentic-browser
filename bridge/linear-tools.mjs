@@ -65,9 +65,60 @@ export const TOOLS = [
         title: str('Optional new title'),
         description: str('Optional new description. Replaces the old one'),
         assignee: str('Optional user id from list_users, or "none"'),
+        dueDate: str('Optional due date YYYY-MM-DD, or "none"'),
+        estimate: int('Optional estimate, a whole number'),
+        parent: str('Optional parent issue id like OPS-12, or "none"'),
       },
       required: ['id'],
     },
+  },
+  {
+    name: 'list_labels',
+    description: 'List label names, optionally for one team. set_labels takes these names.',
+    inputSchema: { type: 'object', properties: { team: str('Optional team key, for example OPS') } },
+  },
+  {
+    name: 'set_labels',
+    description: 'Add and/or remove existing labels on one issue, by name. Cannot create labels.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: str('Issue id like OPS-123'),
+        add: { type: 'array', items: { type: 'string' }, description: 'Label names to add' },
+        remove: { type: 'array', items: { type: 'string' }, description: 'Label names to remove' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'list_projects',
+    description: 'List project names and states. set_project takes a name.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'set_project',
+    description: 'Put one issue in a project by name, or "none" to take it out.',
+    inputSchema: { type: 'object', properties: { id: str('Issue id like OPS-123'), project: str('Project name, or "none"') }, required: ['id', 'project'] },
+  },
+  {
+    name: 'list_cycles',
+    description: 'List recent cycles of a team (number, name, dates, whether active).',
+    inputSchema: { type: 'object', properties: { team: str('Team key, for example OPS') }, required: ['team'] },
+  },
+  {
+    name: 'set_cycle',
+    description: 'Put one issue in a cycle by its number from list_cycles, or "none".',
+    inputSchema: { type: 'object', properties: { id: str('Issue id like OPS-123'), cycle: { description: 'Cycle number, or the text "none"' } }, required: ['id', 'cycle'] },
+  },
+  {
+    name: 'archive_issue',
+    description: 'Archive one issue. It stays recoverable with unarchive_issue. Only when the requester asked. Cannot delete.',
+    inputSchema: { type: 'object', properties: { id: str('Issue id like OPS-123') }, required: ['id'] },
+  },
+  {
+    name: 'unarchive_issue',
+    description: 'Bring an archived issue back.',
+    inputSchema: { type: 'object', properties: { id: str('Issue id like OPS-123') }, required: ['id'] },
   },
   {
     name: 'add_comment',

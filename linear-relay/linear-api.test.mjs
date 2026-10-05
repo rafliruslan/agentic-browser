@@ -19,9 +19,9 @@ function fake(handlers) {
 
 const issue = { id: 'uuid-1', identifier: 'OPS-9', url: 'u', team: { key: 'OPS', states: { nodes: [{ id: 's1', name: 'Todo' }, { id: 's2', name: 'In Review' }] } } };
 
-test('only the listed actions exist, and nothing destructive is on the list', () => {
-  assert.deepEqual(ACTIONS, ['list_teams', 'list_users', 'search_issues', 'get_issue', 'create_issue', 'update_issue', 'add_comment']);
-  assert.ok(!ACTIONS.some((a) => /delete|archive|remove|project|cycle|label/.test(a)));
+test('only the listed actions exist, and none of them deletes', () => {
+  assert.deepEqual(ACTIONS, ['list_teams', 'list_users', 'search_issues', 'get_issue', 'create_issue', 'update_issue', 'add_comment', 'list_labels', 'set_labels', 'list_projects', 'set_project', 'list_cycles', 'set_cycle', 'archive_issue', 'unarchive_issue']);
+  assert.ok(!ACTIONS.some((a) => /delete|destroy|remove/.test(a)));
 });
 
 test('an unknown action is refused with the list of known ones', async () => {
@@ -146,4 +146,63 @@ test('no requester, or a made-up one, adds nothing', async () => {
   assert.equal(creates[0].variables.input.description, 'd');
   assert.equal(creates[1].variables.input.description, 'd');
   assert.ok(!calls.some((c) => c.query.includes('user(id:$id)')));
+});
+
+test('set_labels adds and removes by name, only from labels that exist for the issue\'s team', async () => {
+  const { gql, calls } = fake({
+    'issueLabels(first:250){ nodes{ id name team': { issue: { id: 'uuid-1', identifier: 'OPS-9', team: { key: 'OPS' }, labels: { nodes: [{ id: 'l1', name: 'Bug' }] } }, issueLabels: { nodes: [{ id: 'l1', name: 'Bug', team: null }, { id: 'l2', name: 'Urgent', team: { key: 'OPS' } }, { id: 'l3', name: 'Elsewhere', team: { key: 'PE' } }] } },
+    issueUpdate: { issueUpdate: { success: true, issue: { identifier: 'OPS-9' } } },
+  });
+  const out = await runAction('set_labels', { id: 'OPS-9', add: ['urgent'], remove: ['Bug'] }, gql);
+  assert.deepEqual(out, { id: 'OPS-9', labels: ['Urgent'] });
+  assert.deepEqual(calls.at(-1).variables.input, { labelIds: ['l2'] });
+  await assert.rejects(runAction('set_labels', { id: 'OPS-9', add: ['Elsewhere'] }, gql), /No label "Elsewhere" for OPS\. Options: Bug, Urgent/);
+  await assert.rejects(runAction('set_labels', { id: 'OPS-9' }, gql), /add and\/or remove/);
+});
+
+test('set_project resolves a name and can clear it', async () => {
+  const { gql, calls } = fake({
+    'issue(id:$id){ id identifier': { issue },
+    'projects(first:100)': { projects: { nodes: [{ id: 'p1', name: '0Spike Readiness' }] } },
+    issueUpdate: { issueUpdate: { success: true, issue: { identifier: 'OPS-9' } } },
+  });
+  assert.deepEqual(await runAction('set_project', { id: 'OPS-9', project: '0spike readiness' }, gql), { id: 'OPS-9', project: '0spike readiness' });
+  assert.deepEqual(calls.at(-1).variables.input, { projectId: 'p1' });
+  await runAction('set_project', { id: 'OPS-9', project: 'none' }, gql);
+  assert.deepEqual(calls.at(-1).variables.input, { projectId: null });
+  await assert.rejects(runAction('set_project', { id: 'OPS-9', project: 'Nope' }, gql), /No project "Nope"\. Options: 0Spike Readiness/);
+});
+
+test('set_cycle looks the number up in the issue\'s own team', async () => {
+  const { gql, calls } = fake({
+    'issue(id:$id){ id identifier': { issue },
+    'cycles(first:1': { cycles: { nodes: [{ id: 'cy1', number: 7 }] } },
+    issueUpdate: { issueUpdate: { success: true, issue: { identifier: 'OPS-9' } } },
+  });
+  assert.deepEqual(await runAction('set_cycle', { id: 'OPS-9', cycle: 7 }, gql), { id: 'OPS-9', cycle: '7' });
+  assert.deepEqual(calls.find((c) => c.query.includes('cycles(first:1')).variables, { k: 'OPS', n: 7 });
+  assert.deepEqual(calls.at(-1).variables.input, { cycleId: 'cy1' });
+  await assert.rejects(runAction('set_cycle', { id: 'OPS-9', cycle: 'soon' }, gql), /cycle number/);
+});
+
+test('archive and unarchive use only the archive mutations, never a delete', async () => {
+  const { gql, calls } = fake({
+    'issue(id:$id){ id identifier': { issue },
+    issueArchive: { issueArchive: { success: true } },
+    issueUnarchive: { issueUnarchive: { success: true } },
+  });
+  assert.deepEqual(await runAction('archive_issue', { id: 'OPS-9' }, gql), { id: 'OPS-9', archived: true });
+  assert.deepEqual(await runAction('unarchive_issue', { id: 'OPS-9' }, gql), { id: 'OPS-9', archived: false });
+  assert.ok(!calls.some((c) => /issueDelete|Delete/.test(c.query)));
+});
+
+test('update_issue takes dueDate, estimate and parent, and rejects bad values', async () => {
+  const { gql, calls } = fake({
+    'issue(id:$id){ id identifier': (v) => ({ issue: { ...issue, id: v.id === 'OPS-1' ? 'uuid-parent' : 'uuid-1' } }),
+    issueUpdate: { issueUpdate: { success: true, issue: { identifier: 'OPS-9', title: 'T', url: 'u', state: null, assignee: null, priority: 0 } } },
+  });
+  await runAction('update_issue', { id: 'OPS-9', dueDate: '2026-10-20', estimate: 3, parent: 'OPS-1' }, gql);
+  assert.deepEqual(calls.find((c) => c.query.includes('issueUpdate')).variables.input, { dueDate: '2026-10-20', estimate: 3, parentId: 'uuid-parent' });
+  await assert.rejects(runAction('update_issue', { id: 'OPS-9', dueDate: 'tomorrow' }, gql), /YYYY-MM-DD/);
+  await assert.rejects(runAction('update_issue', { id: 'OPS-9', estimate: -1 }, gql), /estimate must be/);
 });
