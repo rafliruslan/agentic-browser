@@ -41,7 +41,7 @@ async function linearToken(env, agent, { fresh = false } = {}) {
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'client_credentials',
-      scope: 'read,write',
+      scope: 'read,write,app:assignable,app:mentionable',
       client_id: env[`CLIENT_ID_${A}`] ?? '',
       client_secret: env[`CLIENT_SECRET_${A}`] ?? '',
     }),
