@@ -13,7 +13,8 @@ function fakeKV() {
     async get(k) { return m.get(k) ?? null; },
     async put(k, v) { m.set(k, v); },
     async delete(k) { m.delete(k); },
-    async list({ prefix, limit }) {
+    async list() { throw new Error('list() is over quota on the free plan; the relay must not call it'); },
+    async _unusedList({ prefix, limit }) {
       return { keys: [...m.keys()].filter((k) => k.startsWith(prefix)).sort().slice(0, limit).map((name) => ({ name })) };
     },
   };
@@ -121,7 +122,7 @@ test('the same signed request twice queues once', async () => {
       );
     assert.deepEqual(await (await send()).json(), { ok: true, queued: true });
     assert.deepEqual(await (await send()).json(), { ok: true, queued: false });
-    assert.equal([...env.QUEUE.m.keys()].filter((k) => k.startsWith('q:')).length, 1);
+    assert.equal(JSON.parse(env.QUEUE.m.get('head:hammock') ?? '[]').length, 1);
   } finally {
     linear.restore();
   }
@@ -143,7 +144,7 @@ test('a valid event from someone else is 200 but dropped, with no ack', async ()
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { ok: true, queued: false });
     await Promise.all(c.pending);
-    assert.equal([...env.QUEUE.m.keys()].filter((k) => k.startsWith('q:')).length, 0);
+    assert.equal(env.QUEUE.m.get('head:hammock'), undefined);
     assert.equal(linear.calls.length, 0);
   } finally {
     linear.restore();

@@ -111,9 +111,8 @@ async function hook(request, env, ctx, agent) {
     return json(200, { ok: true, queued: false });
   }
 
-  const { event } = verdict;
-  const key = `q:${agent}:${String(event.receivedAt).padStart(15, '0')}:${crypto.randomUUID()}`;
-  await env.QUEUE.put(key, JSON.stringify(event), { expirationTtl: QUEUE_TTL_S });
+  const event = { ...verdict.event, id: crypto.randomUUID() };
+  await writeQueue(env, agent, [...(await readQueue(env, agent)), event]);
 
   // Linear wants a thought within 10 seconds or the session shows as dead. A
   // bridge polls every few seconds but may be asleep, so the Worker says it.
@@ -129,15 +128,38 @@ async function hook(request, env, ctx, agent) {
   return json(200, { ok: true, queued: true });
 }
 
+/** The queue is one small key per agent, so a poll is a single KV get. */
+const headKey = (agent) => `head:${agent}`;
+
+async function readQueue(env, agent) {
+  const raw = await env.QUEUE.get(headKey(agent));
+  if (!raw) return [];
+  try {
+    const list = JSON.parse(raw);
+    const cutoff = Date.now() - QUEUE_TTL_S * 1000;
+    return Array.isArray(list) ? list.filter((e) => e && e.receivedAt >= cutoff) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeQueue(env, agent, list) {
+  if (list.length) await env.QUEUE.put(headKey(agent), JSON.stringify(list), { expirationTtl: QUEUE_TTL_S });
+  else await env.QUEUE.delete(headKey(agent));
+}
+
 async function pull(env, agent) {
-  const listed = await env.QUEUE.list({ prefix: `q:${agent}:`, limit: 1 });
-  const first = listed.keys[0];
+  // A get per poll, not a list: the free plan allows 1,000 list calls a day and
+  // two bridges polling every 5 seconds make 34,000.
+  const queued = await readQueue(env, agent);
+  const first = queued[0];
   if (!first) return json(200, { events: [] });
-  const value = await env.QUEUE.get(first.name);
-  // Deleted before it is handed over: at most once, so a crashed bridge drops
-  // an event instead of replaying an action in a logged-in browser.
-  await env.QUEUE.delete(first.name);
-  return json(200, { events: value ? [JSON.parse(value)] : [] });
+  // Taken before it is handed over: at most once, so a crashed bridge drops an
+  // event instead of replaying an action in a logged-in browser. Re-read just
+  // before writing, so an event that arrived a moment ago is not lost.
+  const now = await readQueue(env, agent);
+  await writeQueue(env, agent, now.filter((e) => e.id !== first.id));
+  return json(200, { events: [first] });
 }
 
 async function activity(request, env, agent) {
