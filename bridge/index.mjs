@@ -621,7 +621,7 @@ async function main() {
       const withNote = note ? `${task}\n\n---\n\n${note}` : task;
       // No confirmed words from him means the brief is other people's text, so
       // the turn gets no tools. See runPolicy.
-      const policy = runPolicy(hint, ALLOWED_TOOLS, MCP_CONFIG, role);
+      const policy = runPolicy(hint, ALLOWED_TOOLS, MCP_CONFIG, role, env.LINEAR_TEAM_MCP_CONFIG || null);
       // The hooks learn who is asking, as on Slack. Unset means the operator.
       const spawnForLinear = (bin, args, opts) =>
         spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, actor) } });
@@ -700,6 +700,7 @@ async function main() {
       client: relay,
       agent: LINEAR_AGENT,
       runTurn: runLinearTurn,
+      linearTools: Boolean(env.LINEAR_TEAM_MCP_CONFIG),
       // Marks the run stopped only if one is live, or the next real run would
       // have its answer swallowed.
       stopTurn: (key) => runs.isRunning(key) && runs.stop(key),

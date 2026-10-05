@@ -146,10 +146,10 @@ export function gate(payload, { allowedUser, teamUsers = '', now = Date.now() } 
 
 /** Parse /hook/<agent>, /pull/<agent> or /activity/<agent>. */
 export function route(method, pathname) {
-  const m = /^\/(hook|pull|activity)\/([a-z]+)$/.exec(pathname);
+  const m = /^\/(hook|pull|activity|linear)\/([a-z]+)$/.exec(pathname);
   if (!m || !AGENTS.includes(m[2])) return null;
   const [, kind, agent] = m;
-  const want = { hook: 'POST', pull: 'GET', activity: 'POST' }[kind];
+  const want = { hook: 'POST', pull: 'GET', activity: 'POST', linear: 'POST' }[kind];
   if (method !== want) return { kind, agent, methodNotAllowed: true };
   return { kind, agent };
 }

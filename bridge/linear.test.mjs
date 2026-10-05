@@ -328,3 +328,23 @@ test('an event handed over twice runs once', async () => {
   // e-1 once, e-2 once, and two events with no id are never treated as repeats.
   assert.equal(runs, 4);
 });
+
+test('a teammate with words gets the Linear tools only when a team MCP config is set', () => {
+  const withCfg = runPolicy('close OPS-9', ['Read'], '/cfg/mcp.json', 'team', '/cfg/mcp.linear.json');
+  assert.deepEqual(withCfg.allowedTools, ['Read', 'Glob', 'Grep', 'mcp__linear']);
+  assert.equal(withCfg.mcpConfig, '/cfg/mcp.linear.json');
+  const without = runPolicy('close OPS-9', ['Read'], '/cfg/mcp.json', 'team');
+  assert.deepEqual(without.allowedTools, ['Read', 'Glob', 'Grep']);
+  assert.equal(without.mcpConfig, NO_MCP);
+  // Still no writes to files, web or shell.
+  for (const t of ['Write', 'Edit', 'WebFetch', 'Bash']) assert.ok(withCfg.deniedTools.includes(t), t);
+});
+
+test('the Linear tools are mentioned to a teammate only when attached and when they gave words', () => {
+  const on = buildLinearTask(teamEvent(), { nonce: 'n', linearTools: true });
+  assert.match(on, /You have Linear tools \(get_issue/);
+  assert.match(on, /one change at a time/);
+  assert.doesNotMatch(buildLinearTask(teamEvent(), { nonce: 'n' }), /You have Linear tools/);
+  assert.doesNotMatch(buildLinearTask(teamEvent({ request: '' }), { nonce: 'n', linearTools: true }), /You have Linear tools/);
+  assert.doesNotMatch(buildLinearTask(event(), { nonce: 'n', linearTools: true }), /You have Linear tools/);
+});

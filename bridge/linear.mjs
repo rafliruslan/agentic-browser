@@ -39,7 +39,7 @@ function whereFrom(issue) {
 }
 
 /** The task text for one relay event. */
-export function buildLinearTask(event, { nonce = randomBytes(8).toString('hex') } = {}) {
+export function buildLinearTask(event, { nonce = randomBytes(8).toString('hex'), linearTools = false } = {}) {
   const where = whereFrom(event.issue);
   const ask = String(event.request ?? '').trim();
   const team = event.role === TEAM;
@@ -48,6 +48,11 @@ export function buildLinearTask(event, { nonce = randomBytes(8).toString('hex') 
   const lines = [
     team ? `A teammate (Linear user ${actor}) called you from Linear, on ${where}.` : `Rafli called you from Linear, on ${where}.`,
     ...(team ? [roleNote(TEAM, actor, 'Linear')] : []),
+    // Only said when the tools are really attached to this turn.
+    ...(team && linearTools && ask
+      ? ['You have Linear tools (get_issue, search_issues, list_users, list_teams, create_issue, update_issue, add_comment). They act as you, the agent, never as a person. ' +
+         'Use them only for what they asked: one change at a time, say what you changed with the issue id, and leave every other issue alone. You cannot delete or archive.']
+      : []),
     'Your reply is written back into that Linear session. Teammates read the issue too, so keep it short and plain.',
     // Found in the first live test: a reply carried session-start output about a
     // note holding a customer's name. Everything a Linear reply says is public to
@@ -95,15 +100,17 @@ export const CAUTIOUS_DENIED = [
  * issue and waits. His reply with words is the go-ahead, and that turn has the
  * full tools, so he reads what it proposes before anything is done.
  */
-export function runPolicy(request, fullTools, fullMcp, role) {
+export function runPolicy(request, fullTools, fullMcp, role, teamMcp = null) {
   if (role === TEAM && String(request ?? '').trim()) {
     // A teammate with words: read-only reach into the shared notes, no browser,
     // no writes, no web. The path fence and Proton guard also see the role.
     return {
-      allowedTools: ['Read', 'Glob', 'Grep'],
+      // The Linear tools, when a config for them is set: allowlisted actions as
+      // the agent's own app user, nothing else. No config means no MCP at all.
+      allowedTools: ['Read', 'Glob', 'Grep', ...(teamMcp ? ['mcp__linear'] : [])],
       deniedTools: [...TEAM_DENIED_TOOLS, 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'],
       permissionMode: 'default',
-      mcpConfig: NO_MCP,
+      mcpConfig: teamMcp || NO_MCP,
       cautious: false,
       team: true,
     };
@@ -145,7 +152,7 @@ export function createRelayClient({ url, token, fetchFn = fetch }) {
  * owns sessions, the queue and the run registry. The key is the Linear session,
  * so a follow-up in the same session resumes the same conversation.
  */
-export function createLinearHandler({ client, agent, runTurn, stopTurn, log = console }) {
+export function createLinearHandler({ client, agent, runTurn, stopTurn, linearTools = false, log = console }) {
   // KV is eventually consistent, so the relay can occasionally hand over an event
   // twice. Remember the ids it gave and skip a repeat: a mention must not run twice.
   const seen = new Set();
@@ -173,7 +180,7 @@ export function createLinearHandler({ client, agent, runTurn, stopTurn, log = co
 
     let result;
     try {
-      result = await runTurn({ key, task: buildLinearTask(event), hint: event.request, role: event.role, actor: event.actor });
+      result = await runTurn({ key, task: buildLinearTask(event, { linearTools }), hint: event.request, role: event.role, actor: event.actor });
     } catch (err) {
       // The detail stays in the local log: this comment is visible to the whole
       // team, and an error message can carry paths or commands from this machine.

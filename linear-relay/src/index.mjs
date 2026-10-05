@@ -16,6 +16,7 @@
  */
 
 import { verifyWebhook, gate, route, bearer, safeEqual, checkActivity } from './relay.mjs';
+import { runAction, ActionError } from './linear-api.mjs';
 
 const LINEAR_GRAPHQL = 'https://api.linear.app/graphql';
 const LINEAR_TOKEN = 'https://api.linear.app/oauth/token';
@@ -71,6 +72,47 @@ async function postActivity(env, agent, { agentSessionId, type, body }) {
       throw new Error(`activity failed: ${res.status} ${JSON.stringify(out.errors ?? out).slice(0, 300)}`);
     }
     return;
+  }
+}
+
+/** GraphQL as the agent's app user. One retry with a fresh token on a 401. */
+function gqlFor(env, agent) {
+  return async (query, variables) => {
+    for (const fresh of [false, true]) {
+      const token = await linearToken(env, agent, { fresh });
+      const res = await fetch(LINEAR_GRAPHQL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({ query, variables }),
+      });
+      if (res.status === 401 && !fresh) continue;
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok || out.errors?.length) {
+        throw new Error(`linear ${res.status} ${JSON.stringify(out.errors ?? out).slice(0, 300)}`);
+      }
+      return out.data;
+    }
+  };
+}
+
+/** The allowlisted Linear actions. See linear-api.mjs for what is and is not on the list. */
+async function linearAction(request, env, agent) {
+  const raw = await request.text();
+  if (raw.length > MAX_BODY) return json(413, { error: 'too large' });
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return json(400, { error: 'not json' });
+  }
+  try {
+    const result = await runAction(body?.action, body?.args, gqlFor(env, agent));
+    return json(200, { ok: true, result });
+  } catch (err) {
+    if (err instanceof ActionError) return json(400, { ok: false, error: err.message });
+    // The detail stays in the Worker log: it can carry Linear's own wording.
+    console.log(`[${agent}] linear action ${String(body?.action).slice(0, 30)} failed: ${err.message}`);
+    return json(502, { ok: false, error: 'Linear refused or failed that request. Check the arguments and try once more.' });
   }
 }
 
@@ -198,6 +240,8 @@ export default {
     const token = bearer(request.headers.get('authorization'));
     const want = env[`PULL_TOKEN_${r.agent.toUpperCase()}`];
     if (!token || !want || !safeEqual(token, want)) return json(401, { error: 'unauthorized' });
-    return r.kind === 'pull' ? pull(env, r.agent) : activity(request, env, r.agent);
+    if (r.kind === 'pull') return pull(env, r.agent);
+    if (r.kind === 'linear') return linearAction(request, env, r.agent);
+    return activity(request, env, r.agent);
   },
 };
