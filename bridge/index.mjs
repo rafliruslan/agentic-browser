@@ -600,7 +600,7 @@ async function main() {
    * session resumes the same conversation. No Slack signals: the reply goes
    * back through the relay as a Linear activity.
    */
-  async function runLinearTurn({ key, task, hint }) {
+  async function runLinearTurn({ key, task, hint, role, actor }) {
     return queue.add(key, async () => {
       const route = pickModel(hint ?? '');
       const existing = await sessions.get(key);
@@ -621,7 +621,10 @@ async function main() {
       const withNote = note ? `${task}\n\n---\n\n${note}` : task;
       // No confirmed words from him means the brief is other people's text, so
       // the turn gets no tools. See runPolicy.
-      const policy = runPolicy(hint, ALLOWED_TOOLS, MCP_CONFIG);
+      const policy = runPolicy(hint, ALLOWED_TOOLS, MCP_CONFIG, role);
+      // The hooks learn who is asking, as on Slack. Unset means the operator.
+      const spawnForLinear = (bin, args, opts) =>
+        spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, actor) } });
       const attempt = (id, fresh, prompt) =>
         runAgent({
           prompt,
@@ -631,6 +634,7 @@ async function main() {
           model: route.model,
           effort: route.effort,
           permissionMode: policy.permissionMode,
+          spawnFn: spawnForLinear,
           mcpConfig: policy.mcpConfig,
           allowedTools: policy.allowedTools,
           deniedTools: [...DENIED, ...(policy.deniedTools || [])],

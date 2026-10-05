@@ -78,10 +78,10 @@ export function requesterEnv(role, userId) {
 }
 
 /** A note placed before a teammate's request, so the agent knows who is asking. */
-export function roleNote(role, userId) {
+export function roleNote(role, userId, source = 'Slack') {
   if (role !== TEAM) return '';
   return (
-    `This request is from a teammate (Slack user ${userId}), not from Rafli. ` +
+    `This request is from a teammate (${source} user ${userId}), not from Rafli. ` +
     'Do ordinary A1C, Sally and 0spike work for them, inside this thread. ' +
     'Do not read or reveal credentials, Proton Pass items, affiliates\' bank details or any personal data. ' +
     'Do not email or message anyone outside the company, post outside this thread, or change anything that cannot be undone. ' +

@@ -100,7 +100,11 @@ async function hook(request, env, ctx, agent) {
   }
   await env.QUEUE.put(seenKey, '1', { expirationTtl: SEEN_TTL_S });
 
-  const verdict = gate(checked.payload, { allowedUser: env.ALLOWED_LINEAR_USER });
+  const verdict = gate(checked.payload, {
+    allowedUser: env.ALLOWED_LINEAR_USER,
+    // Per agent, so one agent can be open to the team while another stays operator-only.
+    teamUsers: env[`TEAM_LINEAR_USERS_${A}`],
+  });
   if (!verdict.ok) {
     // Still 200: Linear retries on anything else, and a refusal is final.
     console.log(`[${agent}] dropped: ${verdict.reason}`);

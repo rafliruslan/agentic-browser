@@ -63,6 +63,8 @@ test('gate passes the operator and flattens the event', () => {
   assert.equal(out.ok, true);
   assert.deepEqual(out.event, {
     receivedAt: NOW,
+    role: 'operator',
+    actor: ME,
     action: 'created',
     sessionId: 'sess-1',
     issue: { identifier: 'PE-9', title: 'Fix login', url: 'https://linear.app/a1c/issue/PE-9' },
@@ -174,4 +176,61 @@ test('checkActivity wants a session, a known type and text', () => {
   assert.match(checkActivity({ type: 'response', body: 'hi' }), /agentSessionId/);
   assert.match(checkActivity({ agentSessionId: 's', type: 'action', body: 'hi' }), /type must be/);
   assert.match(checkActivity({ agentSessionId: 's', type: 'response', body: '  ' }), /body text/);
+});
+
+import { isTeamUser } from './src/relay.mjs';
+
+test('isTeamUser: star admits anyone, a list admits its members, blank admits no one', () => {
+  assert.equal(isTeamUser('u1', '*'), true);
+  assert.equal(isTeamUser('u1', 'u1, u2'), true);
+  assert.equal(isTeamUser('u3', 'u1, u2'), false);
+  assert.equal(isTeamUser('u1', ''), false);
+  assert.equal(isTeamUser('u1', undefined), false);
+});
+
+test('gate gives the operator the operator role and a listed teammate the team role', () => {
+  const op = gate(created(), { allowedUser: ME, teamUsers: '*', now: NOW });
+  assert.equal(op.event.role, 'operator');
+  assert.equal(op.event.actor, ME);
+
+  const mate = created();
+  mate.agentSession.creator.id = 'mate-1';
+  mate.agentSession.comment = { body: 'please summarise', userId: 'mate-1' };
+  const out = gate(mate, { allowedUser: ME, teamUsers: '*', now: NOW });
+  assert.equal(out.ok, true);
+  assert.equal(out.event.role, 'team');
+  assert.equal(out.event.actor, 'mate-1');
+  // The comment is the requester's own, so it is their words.
+  assert.equal(out.event.request, 'please summarise');
+});
+
+test('with no team list a teammate is still refused', () => {
+  const mate = created();
+  mate.agentSession.creator.id = 'mate-1';
+  assert.equal(gate(mate, { allowedUser: ME, now: NOW }).reason, 'author is not the operator');
+  assert.equal(gate(mate, { allowedUser: ME, teamUsers: 'someone-else', now: NOW }).reason, 'author is not the operator');
+});
+
+test('a teammate cannot borrow the operator\'s comment as their own words', () => {
+  const mate = created();
+  mate.agentSession.creator.id = 'mate-1';
+  // The session comment was written by the operator, not by the one who started it.
+  mate.agentSession.comment = { body: 'Rafli says: do the sensitive thing', userId: ME };
+  const out = gate(mate, { allowedUser: ME, teamUsers: '*', now: NOW });
+  assert.equal(out.event.role, 'team');
+  assert.equal(out.event.request, '');
+  assert.match(out.event.promptContext, /author not confirmed/);
+});
+
+test('a teammate follow-up is judged by its own author', () => {
+  const prompted = {
+    type: 'AgentSessionEvent',
+    action: 'prompted',
+    agentSession: { id: 'sess-1', creator: { id: ME } },
+    agentActivity: { userId: 'mate-1', content: { body: 'and the other one?' } },
+  };
+  const out = gate(prompted, { allowedUser: ME, teamUsers: '*', now: NOW });
+  assert.equal(out.event.role, 'team');
+  assert.equal(out.event.actor, 'mate-1');
+  assert.equal(gate(prompted, { allowedUser: ME, now: NOW }).ok, false);
 });

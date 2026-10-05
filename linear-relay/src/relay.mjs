@@ -61,6 +61,12 @@ export async function verifyWebhook({ secret, rawBody, signature, now = Date.now
   return { ok: true, payload };
 }
 
+/** Is this Linear user on an agent's team list? `*` admits anyone, blank admits no one. */
+export function isTeamUser(actor, list) {
+  const items = String(list ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  return items.includes('*') || items.includes(actor);
+}
+
 /** Who caused this event: the session's creator, or the author of a follow-up. */
 export function actorOf(payload) {
   if (payload?.action === 'prompted') {
@@ -79,7 +85,7 @@ export function actorOf(payload) {
  *
  * @returns {{ok:true, event:object} | {ok:false, reason:string}}
  */
-export function gate(payload, { allowedUser, now = Date.now() } = {}) {
+export function gate(payload, { allowedUser, teamUsers = '', now = Date.now() } = {}) {
   if (!allowedUser) return { ok: false, reason: 'ALLOWED_LINEAR_USER is not set' };
   if (payload?.type !== 'AgentSessionEvent') return { ok: false, reason: `ignored type ${payload?.type}` };
   if (payload.action !== 'created' && payload.action !== 'prompted') {
@@ -89,7 +95,10 @@ export function gate(payload, { allowedUser, now = Date.now() } = {}) {
   if (!session?.id) return { ok: false, reason: 'no session id' };
   const actor = actorOf(payload);
   if (!actor) return { ok: false, reason: 'no author on the event' };
-  if (actor !== allowedUser) return { ok: false, reason: 'author is not the operator' };
+  // The operator, or a teammate when this agent has a team list. `*` means any
+  // workspace member who can start a session. No list means operator only.
+  const role = actor === allowedUser ? 'operator' : isTeamUser(actor, teamUsers) ? 'team' : null;
+  if (!role) return { ok: false, reason: 'author is not the operator' };
 
   const activity = payload.agentActivity;
 
@@ -104,7 +113,7 @@ export function gate(payload, { allowedUser, now = Date.now() } = {}) {
     const comment = session.comment;
     const body = String(comment?.body ?? '');
     const author = comment?.userId ?? comment?.user?.id ?? null;
-    if (body && author === allowedUser) {
+    if (body && author === actor) {
       request = body;
     } else if (body) {
       promptContext = `Comment that started this session (author not confirmed as the operator):\n${body}\n\n${promptContext}`;
@@ -115,6 +124,8 @@ export function gate(payload, { allowedUser, now = Date.now() } = {}) {
     ok: true,
     event: {
       receivedAt: now,
+      role,
+      actor,
       action: payload.action,
       sessionId: session.id,
       issue: session.issue
