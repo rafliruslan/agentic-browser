@@ -73,6 +73,9 @@ test('an absolute or climbing Glob pattern is checked like a path', () => {
   assert.match(check(ev('Glob', { pattern: `${join(base, 'private')}/**` }), cfg), /outside/);
   assert.match(check(ev('Glob', { pattern: '../../../../private/*' }), cfg), /outside/);
   assert.equal(check(ev('Glob', { pattern: '**/*.md' }), cfg), null);
+  // A wildcard before '..' hides the destination, so it is refused outright.
+  assert.throws(() => check(ev('Glob', { pattern: '*/../../hm/**' }), cfg), /climb through a wildcard/);
+  assert.throws(() => check(ev('Glob', { pattern: '{a,b}/../../private/*' }), cfg), /climb through a wildcard/);
 });
 
 test('Bash is blocked outright, other tools are left alone', () => {

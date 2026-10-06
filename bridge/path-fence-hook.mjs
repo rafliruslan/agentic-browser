@@ -87,7 +87,13 @@ function pathsOf(tool, input, cwd) {
   if (tool === 'Glob' && typeof input.pattern === 'string') {
     // An absolute or climbing pattern names a place of its own.
     const pat = expand(input.pattern);
-    if (isAbsolute(pat) || pat.split('/').includes('..')) {
+    const segs = pat.split('/');
+    if (isAbsolute(pat) || segs.includes('..')) {
+      // A wildcard before a '..' hides where the pattern ends up
+      // (`*/../../x/**`), so no base can be derived from it: fail closed.
+      if (segs.slice(0, segs.lastIndexOf('..') + 1).some((s) => /[*?[\]{}]/.test(s))) {
+        throw new Error('a Glob pattern may not climb through a wildcard');
+      }
       const base = pat.split(/[*?[{]/)[0];
       add(base.endsWith('/') ? base : dirname(base));
     }
