@@ -396,8 +396,19 @@ async function main() {
     const sessionKey = role === TEAM ? `${threadTs}:team:${event.user}` : threadTs;
     // A teammate's turn refuses more tools, and its hooks are told who is asking.
     const turnDenied = role === TEAM ? [...DENIED, ...TEAM_DENIED_TOOLS] : DENIED;
+    // Their Slack name, so a Linear ticket the agent files can credit them. Empty
+    // when Slack will not say: the ticket is then filed without a name, not blocked.
+    let requesterName = '';
+    if (role === TEAM) {
+      try {
+        const info = await client.users.info({ user: event.user });
+        requesterName = info?.user?.profile?.display_name || info?.user?.real_name || info?.user?.name || '';
+      } catch {
+        // best effort
+      }
+    }
     const spawnForTurn = (bin, args, opts) =>
-      spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, event.user) } });
+      spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, event.user, requesterName) } });
 
     await queue.add(threadTs, async () => {
       let ok = false;

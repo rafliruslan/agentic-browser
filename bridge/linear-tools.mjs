@@ -136,22 +136,55 @@ const text = (value, isError = false) => ({
   ...(isError ? { isError: true } : {}),
 });
 
+const READ_ONLY = new Set(['list_teams', 'list_users', 'search_issues', 'get_issue', 'list_labels', 'list_projects', 'list_cycles']);
+// The relay credits a requester only when it is a Linear user id (a UUID). A Slack
+// teammate is not one, so the credit is written here instead.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A display name safe to put in a ticket: one line, no markup, bounded. */
+export const cleanName = (value) =>
+  String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/[<>*_`~\[\]()|\\]/g, '').trim().slice(0, 80);
+
 /**
  * Run one tool.
- * @param ctx {{ relayUrl: string, token: string, agent: string, fetchFn?: typeof fetch }}
+ * @param ctx {{ relayUrl: string, token: string, agent: string, fetchFn?: typeof fetch,
+ *   requester?: string, requesterName?: string }}
  */
 export async function callTool(name, args, ctx) {
   if (!TOOLS.some((t) => t.name === name)) return text(`Unknown tool ${String(name).slice(0, 40)}`, true);
   const { relayUrl, token, agent, fetchFn = fetch } = ctx;
-  let res;
-  try {
-    res = await fetchFn(`${String(relayUrl).replace(/\/+$/, '')}/linear/${agent}`, {
+  const url = `${String(relayUrl).replace(/\/+$/, '')}/linear/${agent}`;
+  const send = (action, actionArgs) =>
+    fetchFn(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       // The requester comes from the bridge's environment, never from the agent's
       // arguments, so the agent cannot name someone else.
-      body: JSON.stringify({ action: name, args: args || {}, ...(ctx.requester ? { requester: ctx.requester } : {}) }),
+      body: JSON.stringify({ action, args: actionArgs || {}, ...(ctx.requester ? { requester: ctx.requester } : {}) }),
     });
+
+  // Credit a Slack teammate by the name Slack gives the bridge (never the agent):
+  // in the new ticket or comment itself, and as a note on any other change.
+  const who = !UUID.test(String(ctx.requester ?? '')) ? cleanName(ctx.requesterName) : '';
+  let callArgs = args || {};
+  const credit = who ? `Requested by ${who} (Slack).` : '';
+  try {
+    if (who && name === 'create_issue') {
+      callArgs = { ...callArgs, description: `${callArgs.description ? `${callArgs.description}\n\n` : ''}${credit}` };
+    } else if (who && name === 'add_comment') {
+      callArgs = { ...callArgs, body: `${callArgs.body ?? ''}\n\n${credit}` };
+    } else if (who && !READ_ONLY.has(name) && callArgs.id) {
+      // Before the change, so an archive can still be commented on.
+      const { id, ...rest } = callArgs;
+      await send('add_comment', { id, body: `${who} asked via Slack: ${name} ${JSON.stringify(rest)}`.slice(0, 500) });
+    }
+  } catch {
+    // The note is best effort; the action itself reports its own failure.
+  }
+
+  let res;
+  try {
+    res = await send(name, callArgs);
   } catch {
     // No detail: a network error string can carry the URL.
     return text('Could not reach Linear through the relay. Try again once.', true);

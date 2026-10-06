@@ -102,12 +102,13 @@ export const CAUTIOUS_DENIED = [
  */
 export function runPolicy(request, fullTools, fullMcp, role, teamMcp = null) {
   if (role === TEAM && String(request ?? '').trim()) {
-    // A teammate with words: read-only reach into the shared notes, no browser,
-    // no writes, no web. The path fence and Proton guard also see the role.
+    // A teammate with words: read-only reach into the shared notes, web search
+    // and fetch (opened 2026-10-06 because some tasks need them), no browser, no
+    // writes. The path fence and Proton guard also see the role.
     return {
       // The Linear tools, when a config for them is set: allowlisted actions as
       // the agent's own app user, nothing else. No config means no MCP at all.
-      allowedTools: ['Read', 'Glob', 'Grep', ...(teamMcp ? ['mcp__linear'] : [])],
+      allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', ...(teamMcp ? ['mcp__linear'] : [])],
       deniedTools: [...TEAM_DENIED_TOOLS, 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'],
       permissionMode: 'default',
       mcpConfig: teamMcp || NO_MCP,

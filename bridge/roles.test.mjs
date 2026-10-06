@@ -48,6 +48,8 @@ test('only a teammate turn carries the requester env for the hooks', () => {
   assert.deepEqual(requesterEnv(OPERATOR, OP), {});
   assert.deepEqual(requesterEnv(null, 'U_X'), {});
   assert.deepEqual(requesterEnv(TEAM, 'U_A'), { AGENT_REQUESTER_ROLE: 'team', AGENT_REQUESTER_ID: 'U_A' });
+  assert.deepEqual(requesterEnv(TEAM, 'U_A', 'Ada L'), { AGENT_REQUESTER_ROLE: 'team', AGENT_REQUESTER_ID: 'U_A', AGENT_REQUESTER_NAME: 'Ada L' });
+  assert.deepEqual(requesterEnv(OPERATOR, OP, 'Rafli'), {});
 });
 
 test('the teammate note names who is asking and the limits; the operator gets none', () => {
@@ -57,11 +59,19 @@ test('the teammate note names who is asking and the limits; the operator gets no
   assert.match(note, /credentials, Proton Pass items/);
   assert.match(note, /bank details/);
   assert.match(note, /DM him/);
+  assert.match(note, /Linear tools \(mcp__linear\)/);
+  assert.match(note, /Never use the browser for Linear/);
 });
 
-test('teammate turns refuse web, scheduling and free-prompt tools', () => {
-  for (const t of ['Bash', 'WebFetch', 'WebSearch', 'CronCreate', 'RemoteTrigger', 'mcp__aside__exec']) {
+test('teammate turns refuse shell, scheduling and free-prompt tools', () => {
+  for (const t of ['Bash', 'CronCreate', 'RemoteTrigger', 'mcp__aside__exec']) {
     assert.ok(TEAM_DENIED_TOOLS.includes(t), t);
+  }
+});
+
+test('teammate turns may search and fetch the web', () => {
+  for (const t of ['WebFetch', 'WebSearch']) {
+    assert.ok(!TEAM_DENIED_TOOLS.includes(t), t);
   }
 });
 

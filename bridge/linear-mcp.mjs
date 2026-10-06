@@ -23,7 +23,14 @@ if (!env.LINEAR_RELAY_URL || !env.LINEAR_RELAY_TOKEN || !env.LINEAR_AGENT) {
   process.exit(1);
 }
 // Set by the bridge on a teammate's turn; empty on the operator's.
-const ctx = { relayUrl: env.LINEAR_RELAY_URL, token: env.LINEAR_RELAY_TOKEN, agent: env.LINEAR_AGENT, requester: process.env.AGENT_REQUESTER_ID || undefined };
+// The name is set only on a Slack teammate's turn, from Slack, never by the agent.
+const ctx = {
+  relayUrl: env.LINEAR_RELAY_URL,
+  token: env.LINEAR_RELAY_TOKEN,
+  agent: env.LINEAR_AGENT,
+  requester: process.env.AGENT_REQUESTER_ID || undefined,
+  requesterName: process.env.AGENT_REQUESTER_NAME || undefined,
+};
 
 const server = new Server({ name: 'linear', version: '0.1.0' }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));

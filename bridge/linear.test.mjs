@@ -261,12 +261,13 @@ test('an odd-looking actor id never reaches the task text', () => {
   assert.match(task, /Linear user unknown/);
 });
 
-test('a teammate with words gets read-only reach, no browser, no web, no writes', () => {
+test('a teammate with words gets read-only reach, web search and fetch, no browser, no writes', () => {
   const p = runPolicy('summarise this', ['Read', 'Bash', 'mcp__aside__repl'], '/cfg/mcp.json', 'team');
-  assert.deepEqual(p.allowedTools, ['Read', 'Glob', 'Grep']);
+  assert.deepEqual(p.allowedTools, ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch']);
   assert.equal(p.mcpConfig, NO_MCP);
   assert.equal(p.permissionMode, 'default');
   for (const t of [...TEAM_DENIED_TOOLS, 'Write', 'Edit']) assert.ok(p.deniedTools.includes(t), t);
+  for (const t of ['WebFetch', 'WebSearch']) assert.ok(!p.deniedTools.includes(t), t);
 });
 
 test('a teammate with no words gets the no-tools turn, like the operator', () => {
@@ -331,13 +332,13 @@ test('an event handed over twice runs once', async () => {
 
 test('a teammate with words gets the Linear tools only when a team MCP config is set', () => {
   const withCfg = runPolicy('close OPS-9', ['Read'], '/cfg/mcp.json', 'team', '/cfg/mcp.linear.json');
-  assert.deepEqual(withCfg.allowedTools, ['Read', 'Glob', 'Grep', 'mcp__linear']);
+  assert.deepEqual(withCfg.allowedTools, ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'mcp__linear']);
   assert.equal(withCfg.mcpConfig, '/cfg/mcp.linear.json');
   const without = runPolicy('close OPS-9', ['Read'], '/cfg/mcp.json', 'team');
-  assert.deepEqual(without.allowedTools, ['Read', 'Glob', 'Grep']);
+  assert.deepEqual(without.allowedTools, ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch']);
   assert.equal(without.mcpConfig, NO_MCP);
-  // Still no writes to files, web or shell.
-  for (const t of ['Write', 'Edit', 'WebFetch', 'Bash']) assert.ok(withCfg.deniedTools.includes(t), t);
+  // Still no writes to files or shell.
+  for (const t of ['Write', 'Edit', 'Bash']) assert.ok(withCfg.deniedTools.includes(t), t);
 });
 
 test('the Linear tools are mentioned to a teammate only when attached and when they gave words', () => {

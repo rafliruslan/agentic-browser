@@ -57,3 +57,58 @@ test('the requester goes to the relay from the context, and cannot come from the
   await callTool('list_teams', {}, ctx(async (u, init) => { none = JSON.parse(init.body); return { ok: true, json: async () => ({ ok: true, result: [] }) }; }));
   assert.equal('requester' in none, false);
 });
+
+// A Slack teammate is not a Linear user, so the relay cannot credit them. The
+// name comes from the bridge's environment, and the tools write it themselves.
+const slackCtx = (calls, extra = {}) => ({
+  ...ctx(async (u, init) => { calls.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ ok: true, result: { done: true } }) }; }),
+  requester: 'U09ABC',
+  requesterName: 'Ada L',
+  ...extra,
+});
+
+test('a new ticket for a Slack teammate carries their name in its description', async () => {
+  const calls = [];
+  await callTool('create_issue', { team: 'OPS', title: 'T', description: 'Body' }, slackCtx(calls));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args.description, 'Body\n\nRequested by Ada L (Slack).');
+  const bare = [];
+  await callTool('create_issue', { team: 'OPS', title: 'T' }, slackCtx(bare));
+  assert.equal(bare[0].args.description, 'Requested by Ada L (Slack).');
+});
+
+test('a comment for a Slack teammate carries their name', async () => {
+  const calls = [];
+  await callTool('add_comment', { id: 'OPS-1', body: 'hello' }, slackCtx(calls));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args.body, 'hello\n\nRequested by Ada L (Slack).');
+});
+
+test('any other change is noted on the issue first, so an archive can still be commented on', async () => {
+  const calls = [];
+  await callTool('archive_issue', { id: 'OPS-1' }, slackCtx(calls));
+  assert.deepEqual(calls.map((c) => c.action), ['add_comment', 'archive_issue']);
+  assert.match(calls[0].args.body, /^Ada L asked via Slack: archive_issue/);
+  const upd = [];
+  await callTool('update_issue', { id: 'OPS-2', status: 'Done' }, slackCtx(upd));
+  assert.match(upd[0].args.body, /update_issue \{"status":"Done"\}/);
+  assert.deepEqual(upd[1].args, { id: 'OPS-2', status: 'Done' });
+});
+
+test('reads are never noted, and a Linear user id is left to the relay', async () => {
+  const reads = [];
+  await callTool('get_issue', { id: 'OPS-1' }, slackCtx(reads));
+  assert.deepEqual(reads.map((c) => c.action), ['get_issue']);
+  const uuid = [];
+  await callTool('create_issue', { team: 'OPS', title: 'T' }, slackCtx(uuid, { requester: '123e4567-e89b-12d3-a456-426614174000' }));
+  assert.equal(uuid[0].args.description, undefined);
+  const none = [];
+  await callTool('create_issue', { team: 'OPS', title: 'T' }, slackCtx(none, { requesterName: undefined }));
+  assert.equal(none[0].args.description, undefined);
+});
+
+test('a name is cleaned before it reaches a ticket', async () => {
+  const calls = [];
+  await callTool('create_issue', { team: 'OPS', title: 'T' }, slackCtx(calls, { requesterName: 'Eve\n**[x](http://evil)** <b>' }));
+  assert.equal(calls[0].args.description, 'Requested by Eve xhttp://evil b (Slack).');
+});
