@@ -27,7 +27,8 @@ rather than replaying an action in a logged-in browser. Events expire after an h
 1. Linear → Settings → API → the agent's OAuth app: turn on **Client credentials**
    and **Webhooks**. Webhook URL `https://<worker>/hook/<agent>`, category
    **Agent session events**. Copy the signing secret Linear shows.
-2. `wrangler kv namespace create QUEUE`, put the id in `wrangler.toml`, and set
+2. `cp wrangler.example.toml wrangler.toml` (gitignored), then
+   `wrangler kv namespace create QUEUE`, put the id in `wrangler.toml`, and set
    `ALLOWED_LINEAR_USER` to the operator's Linear user id.
 3. `wrangler secret put` for each of `WEBHOOK_SECRET_<A>`, `PULL_TOKEN_<A>`,
    `CLIENT_ID_<A>`, `CLIENT_SECRET_<A>` (A is `HAMMOCK` or `TARA`).

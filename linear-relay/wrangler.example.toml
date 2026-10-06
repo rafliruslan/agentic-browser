@@ -1,0 +1,20 @@
+# Linear agent relay. See src/index.mjs for the routes and the secrets it needs.
+#
+# Copy to wrangler.toml and fill in your own values. wrangler.toml is
+# gitignored: it holds account-specific ids (your Linear user id, your KV
+# namespace) that do not belong in a public repo.
+name = "linear-relay"
+main = "src/index.mjs"
+compatibility_date = "2026-06-17"
+
+[vars]
+# The one Linear user id whose mentions are accepted. Empty refuses everything.
+ALLOWED_LINEAR_USER = ""
+# Per agent: "*" admits any workspace member as a teammate with fewer tools, blank is
+# operator only. One variable per agent, named TEAM_LINEAR_USERS_<AGENT>.
+TEAM_LINEAR_USERS_TARA = ""
+
+[[kv_namespaces]]
+binding = "QUEUE"
+# From `wrangler kv namespace create QUEUE`.
+id = "<your KV namespace id>"

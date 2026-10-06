@@ -12,3 +12,7 @@ persona.local.md
 workspace/memory/users/
 workspace/memory/companies/
 repl/node_modules/
+
+# Account-specific relay config. linear-relay/wrangler.example.toml shows the shape.
+/linear-relay/wrangler.toml
+/linear-relay/.wrangler/
