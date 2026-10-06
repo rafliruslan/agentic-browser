@@ -87,6 +87,11 @@ function pathsOf(tool, input, cwd) {
   if (tool === 'Glob' && typeof input.pattern === 'string') {
     // An absolute or climbing pattern names a place of its own.
     const pat = expand(input.pattern);
+    // Braces expand before matching, so `{..,x}` or `.{.,}` spell a '..' that no
+    // segment shows. Wildcards cannot, since directory listings never hold '..'.
+    if (/\{[^}]*[./][^}]*\}/.test(pat)) {
+      throw new Error('a Glob pattern may not put a dot or slash inside braces');
+    }
     const segs = pat.split('/');
     if (isAbsolute(pat) || segs.includes('..')) {
       // A wildcard before a '..' hides where the pattern ends up
@@ -95,7 +100,9 @@ function pathsOf(tool, input, cwd) {
         throw new Error('a Glob pattern may not climb through a wildcard');
       }
       const base = pat.split(/[*?[{]/)[0];
-      add(base.endsWith('/') ? base : dirname(base));
+      // Relative to `path` when given, since that is where Glob starts.
+      const from = typeof input.path === 'string' && input.path ? resolve(cwd, expand(input.path)) : cwd;
+      add(resolve(from, base.endsWith('/') ? base : dirname(base)));
     }
   }
   if (SEARCH_TOOLS.has(tool) && out.length === 0) out.push(cwd);

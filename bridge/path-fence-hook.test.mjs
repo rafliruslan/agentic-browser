@@ -76,6 +76,13 @@ test('an absolute or climbing Glob pattern is checked like a path', () => {
   // A wildcard before '..' hides the destination, so it is refused outright.
   assert.throws(() => check(ev('Glob', { pattern: '*/../../hm/**' }), cfg), /climb through a wildcard/);
   assert.throws(() => check(ev('Glob', { pattern: '{a,b}/../../private/*' }), cfg), /climb through a wildcard/);
+  // Braces can spell '..' without a '..' segment.
+  for (const pattern of ['{..,x}/hm/**', 'x/{../..}/hm/**', '.{.,}/hm/*']) {
+    assert.throws(() => check(ev('Glob', { pattern }), cfg), /inside braces/);
+  }
+  assert.equal(check(ev('Glob', { pattern: '**/*.{md,txt}' }), cfg), null);
+  // A climb is measured from `path`, where Glob starts, not from the cwd.
+  assert.match(check(ev('Glob', { path: join(ws, 'sub'), pattern: '../../hm/users/*' }), cfg), /outside/);
 });
 
 test('Bash is blocked outright, other tools are left alone', () => {
