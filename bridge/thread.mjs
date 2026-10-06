@@ -30,6 +30,27 @@ const PLACEHOLDER =
   /^\s*(⏳|:hourglass_flowing_sand:|❌|:x:)\s*(running|queued|bridge error)/i;
 
 /**
+ * One line per file attached to a message, with the id the `file` tool takes.
+ *
+ * Slack puts attachments in `files`, not in `text`, so a transcript built from
+ * text alone said nothing about them: the agent was asked to "sign this" and saw
+ * a message with no file. The name is typed by the sender, so it is stripped of
+ * control characters and capped before it reaches the prompt.
+ */
+export function describeFiles(files) {
+  if (!Array.isArray(files)) return '';
+  return files
+    .filter((f) => f && f.id)
+    .map((f) => {
+      const name = String(f.name || f.title || 'file').replace(/[\u0000-\u001f"]+/g, ' ').trim().slice(0, 80);
+      const kind = f.mimetype || f.filetype || 'unknown type';
+      const kb = Number.isFinite(f.size) ? `, ${Math.max(1, Math.round(f.size / 1024))} KB` : '';
+      return `[attached file "${name}" (${kind}${kb}), id ${f.id}. Download it with mcp__slack__file.]`;
+    })
+    .join('\n');
+}
+
+/**
  * Render fetched Slack messages as a transcript.
  *
  * Everyone who is not the bot used to be labelled "the user", which is wrong
@@ -52,8 +73,10 @@ export function formatThread(messages, botUserId, skipTs, allowedUser) {
     if (!msg || msg.ts === skipTs) continue;
 
     const text = String(msg.text || '').trim();
-    if (!text) continue;
     if (PLACEHOLDER.test(text)) continue;
+    // A message that is only a file has no text, and must still be seen.
+    const files = describeFiles(msg.files);
+    if (!text && !files) continue;
 
     const isBot = msg.bot_id || msg.user === botUserId;
     // Without an allowedUser the old behaviour stands: one human, "the user".
@@ -65,12 +88,13 @@ export function formatThread(messages, botUserId, skipTs, allowedUser) {
 
     // Mentions render as <@U123>; the raw id adds nothing for a reader.
     const cleaned = text.replace(/<@[A-Z0-9]+>/g, '').replace(/[ \t]+/g, ' ').trim();
-    if (!cleaned) continue;
+    if (!cleaned && !files) continue;
 
     const capped =
       cleaned.length > MESSAGE_CAP ? `${cleaned.slice(0, MESSAGE_CAP)}… (truncated)` : cleaned;
 
-    lines.push(`[${speaker}] ${capped}`);
+    // After the cap, so a long message cannot cut off the id the agent needs.
+    lines.push(`[${speaker}] ${[capped, files].filter(Boolean).join('\n')}`);
   }
 
   return lines.join('\n');

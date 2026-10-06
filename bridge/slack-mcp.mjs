@@ -47,6 +47,8 @@ const ctx = {
   // The run's cwd is the workspace. /tmp is listed as well as tmpdir() because
   // on macOS they differ, and screenshots land in both.
   uploadRoots: [process.cwd(), process.env.AGENT_WORKSPACE, tmpdir(), '/tmp'].filter(Boolean),
+  // For the `file` tool only. It is sent to slack.com and appears in no result.
+  token: env.SLACK_BOT_TOKEN,
 };
 
 const server = new Server({ name: 'slack', version: '0.1.0' }, { capabilities: { tools: {} } });

@@ -19,7 +19,7 @@ import { PERSONA } from './persona.mjs';
 import { createSessionStore, DEFAULT_STATE_PATH } from './sessions.mjs';
 import { createPendingStore, DEFAULT_PENDING_PATH } from './pending.mjs';
 import { createQueue } from './queue.mjs';
-import { fetchThreadContext, composeTask, locationNote } from './thread.mjs';
+import { fetchThreadContext, composeTask, locationNote, describeFiles } from './thread.mjs';
 import { parseMention, formatResult } from './text.mjs';
 import { buildBlocks } from './blocks.mjs';
 import { spawn } from 'node:child_process';
@@ -390,7 +390,9 @@ async function main() {
     // Route on what the user typed, then strip the routing marker so the model is
     // never handed "deep:" as part of the task.
     const route = pickModel(mentioned);
-    const prompt = stripDirective(mentioned);
+    // The triggering message is left out of the thread transcript (skipTs), so a
+    // file attached to it is named here or nowhere.
+    const prompt = [stripDirective(mentioned), describeFiles(event.files)].filter(Boolean).join('\n');
     // A teammate gets a conversation of their own in the thread. Sharing the
     // operator's would hand them whatever he asked for earlier in it.
     const sessionKey = role === TEAM ? `${threadTs}:team:${event.user}` : threadTs;

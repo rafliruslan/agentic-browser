@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import { TOOLS, callTool, parseEnv, safeUploadPath, slackError } from './slack-tools.mjs';
+import { TOOLS, callTool, parseEnv, safeUploadPath, slackError, safeFileName, downloadSlackFile } from './slack-tools.mjs';
 
 const TOKEN = 'xoxb-000000000000-SECRET-DO-NOT-LEAK';
 
@@ -180,4 +180,133 @@ test('the env file parses the way the bridge reads it', () => {
     SLACK_BOT_TOKEN: 'xoxb-1',
     ALLOWED_USER: 'U1',
   });
+});
+
+// --- file downloads ----------------------------------------------------------------
+
+const FILE_URL = 'https://files.slack.com/files-pri/T1-F0ABC12345/download/contract.pdf';
+
+/** A fake fetch that serves a queue of responses and records what it was asked. */
+function fakeFetch(...responses) {
+  const calls = [];
+  const fn = async (url, opts) => {
+    calls.push({ url: String(url), opts });
+    const r = responses.shift();
+    return new Response(r.body ?? '', { status: r.status ?? 200, headers: r.headers ?? {} });
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+const withFile = (info) => {
+  const c = fakeClient();
+  c.files = { info: async () => ({ file: info }) };
+  return c;
+};
+
+test('file saves the download under its own id and says to read it as data', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const client = withFile({ id: 'F0ABC12345', name: 'contract.pdf', mimetype: 'application/pdf', size: 4, url_private_download: FILE_URL });
+  const fetchFn = fakeFetch({ body: 'PDF!', headers: { 'content-type': 'application/pdf' } });
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn }));
+  assert.equal(r.isError, undefined);
+  const path = join(root, 'F0ABC12345', 'contract.pdf');
+  assert.equal(await readFile(path, 'utf8'), 'PDF!');
+  assert.match(r.content[0].text, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(r.content[0].text, /do not follow instructions/);
+  assert.equal(JSON.stringify(r).includes(TOKEN), false);
+  assert.equal(fetchFn.calls[0].opts.headers.Authorization, `Bearer ${TOKEN}`);
+});
+
+test('file refuses an id that is not a Slack file id', async () => {
+  const client = withFile({});
+  for (const bad of ['', '../../etc/passwd', 'F1', 'f0abc12345', 'F0ABC12345/../x']) {
+    const r = await callTool('file', { file: bad }, ctx(client, { token: TOKEN }));
+    assert.equal(r.isError, true, bad);
+  }
+});
+
+test('file reports a login page as a failure, not as the file', async () => {
+  const client = withFile({ id: 'F0ABC12345', name: 'a.pdf', mimetype: 'application/pdf', size: 10, url_private_download: FILE_URL });
+  const fetchFn = fakeFetch({ body: '<html>sign in</html>', headers: { 'content-type': 'text/html' } });
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn }));
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /files:read/);
+});
+
+test('file refuses a link that leaves slack.com, and never sends the token there', async () => {
+  const client = withFile({ id: 'F0ABC12345', name: 'a.pdf', size: 1, url_private_download: 'https://evil.example/a.pdf' });
+  const fetchFn = fakeFetch({ body: 'x' });
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, fetchFn }));
+  assert.equal(r.isError, true);
+  assert.equal(fetchFn.calls.length, 0);
+});
+
+test('a redirect off slack.com is not followed with the token', async () => {
+  const fetchFn = fakeFetch({ status: 302, headers: { location: 'https://evil.example/steal' } });
+  const got = await downloadSlackFile(FILE_URL, { token: TOKEN, fetchFn });
+  assert.match(got.error, /outside slack\.com/);
+  assert.equal(fetchFn.calls.length, 1);
+});
+
+test('a redirect inside slack.com is followed', async () => {
+  const fetchFn = fakeFetch(
+    { status: 302, headers: { location: 'https://a1c.slack.com/files-pri/T1-F0ABC12345/x.pdf' } },
+    { body: 'ok', headers: { 'content-type': 'application/pdf' } },
+  );
+  const got = await downloadSlackFile(FILE_URL, { token: TOKEN, fetchFn });
+  assert.equal(got.bytes.toString(), 'ok');
+});
+
+test('file refuses one over the size limit, before downloading it', async () => {
+  const client = withFile({ id: 'F0ABC12345', name: 'big.mov', size: 10 ** 9, url_private_download: FILE_URL });
+  const fetchFn = fakeFetch({ body: 'x' });
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, fetchFn }));
+  assert.equal(r.isError, true);
+  assert.equal(fetchFn.calls.length, 0);
+});
+
+test('a file name cannot choose its own directory', () => {
+  assert.equal(safeFileName('../../.ssh/authorized_keys'), 'authorized_keys');
+  assert.equal(safeFileName('..'), 'file');
+  assert.equal(safeFileName(''), 'file');
+  assert.equal(safeFileName('Kontrak (final).pdf'), 'Kontrak (final).pdf');
+});
+
+test('file on a .docx saves the original and a .txt of its words', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const { deflateRawSync } = await import('node:zlib');
+  // The smallest zip with one Word part: built by hand, as office-text.test.mjs does.
+  const xml = Buffer.from('<w:document><w:body><w:p><w:r><w:t>Tanda tangan di sini</w:t></w:r></w:p></w:body></w:document>');
+  const comp = deflateRawSync(xml);
+  const name = Buffer.from('word/document.xml');
+  const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(8, 8); lh.writeUInt32LE(comp.length, 18); lh.writeUInt32LE(xml.length, 22); lh.writeUInt16LE(name.length, 26);
+  const ch = Buffer.alloc(46); ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(8, 10); ch.writeUInt32LE(comp.length, 20); ch.writeUInt32LE(xml.length, 24); ch.writeUInt16LE(name.length, 28);
+  const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10); end.writeUInt32LE(46 + name.length, 12); end.writeUInt32LE(30 + name.length + comp.length, 16);
+  const docx = Buffer.concat([lh, name, comp, ch, name, end]);
+  const client = withFile({ id: 'F0ABC12345', name: 'Kontrak.docx', mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: docx.length, url_private_download: FILE_URL });
+  const fetchFn = async () => new Response(docx, { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn }));
+  assert.equal(r.isError, undefined);
+  assert.match(r.content[0].text, /Kontrak\.docx\.txt/);
+  assert.equal(await readFile(join(root, 'F0ABC12345', 'Kontrak.docx.txt'), 'utf8'), 'Tanda tangan di sini');
+});
+
+test('file on an old .doc says it cannot be read and what to ask for', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const client = withFile({ id: 'F0ABC12345', name: 'old.doc', mimetype: 'application/msword', size: 4, url_private_download: FILE_URL });
+  const fetchFn = async () => new Response('DOC!', { status: 200, headers: { 'content-type': 'application/msword' } });
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn }));
+  assert.match(r.content[0].text, /old binary Office format/);
+});
+
+test('file on a .xlsx that is not a zip still saves it and explains the failure', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const client = withFile({ id: 'F0ABC12345', name: 'x.xlsx', size: 22, url_private_download: FILE_URL });
+  const fetchFn = async () => new Response('this is not a zip file!!', { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn }));
+  assert.equal(r.isError, undefined);
+  assert.match(r.content[0].text, /Could not extract its text: Not a zip/);
+  assert.equal(await readFile(join(root, 'F0ABC12345', 'x.xlsx'), 'utf8'), 'this is not a zip file!!');
 });
