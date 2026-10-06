@@ -36,6 +36,7 @@ import { allowedTools, browserCdpUrl, deniedBrowserTools, BASE_TOOLS } from './b
 import { parseInterrupt } from './interrupt.mjs';
 import { createRunRegistry } from './runs.mjs';
 import { createRelayClient, createLinearHandler, startPoller, runPolicy } from './linear.mjs';
+import { watchOwnBinary } from './binary-watch.mjs';
 
 const { App } = bolt;
 
@@ -690,6 +691,11 @@ async function main() {
   console.log(`[agent] connected as ${auth.user} (${botUserId}) in ${auth.team}`);
   console.log(`[agent] workspace ${WORKSPACE}, concurrency ${concurrency}, channels ${ALLOWED_CHANNEL || '*'}`);
   console.log(roles.teamEnabled ? `[agent] team access on: ${roles.counts.users} user(s) in ${roles.counts.channels} channel(s)` : '[agent] team access off: operator only');
+
+  // When brew deletes the node binary this process started on, exit so
+  // launchd restarts it on the current one. Releases the lock first, the same
+  // as a signal does. See binary-watch.mjs.
+  watchOwnBinary({ log: console, exit: (code) => { release().finally(() => process.exit(code)); } });
 
   // Linear, when the env names a relay. After the lock, so a refused duplicate
   // bridge never polls and never answers an event twice.
