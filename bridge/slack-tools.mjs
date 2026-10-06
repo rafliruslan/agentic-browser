@@ -15,7 +15,7 @@
  * Pure logic, taking a client with the @slack/web-api shape, so every handler is
  * testable without Slack. slack-mcp.mjs does the wiring.
  */
-import { mkdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join, sep } from 'node:path';
 import { formatThread, recentReplies } from './thread.mjs';
 import { extractOfficeText, isLegacyOffice, officeKind } from './office-text.mjs';
@@ -139,6 +139,31 @@ export async function downloadSlackFile(url, { token, fetchFn = fetch, maxBytes 
     return { bytes };
   }
   return { error: 'Slack redirected too many times.' };
+}
+
+/**
+ * A directory only this user can use, or an error saying why not.
+ *
+ * Downloads go under /tmp, where any local user can pre-create a path. A symlink
+ * planted at the folder, or a folder someone else owns, would turn a download
+ * into a write somewhere else or a file another user can read. So the folder is
+ * checked after it is made, by `lstat`, which does not follow a final symlink.
+ */
+export async function privateDir(path) {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isDirectory()) return { error: `Refused: ${path} is not a plain directory.` };
+  if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
+    return { error: `Refused: ${path} belongs to another user.` };
+  }
+  if (info.mode & 0o077) await chmod(path, 0o700);
+  return { path };
+}
+
+/** Write a new file, never through a link someone left at that name. */
+async function writeFresh(path, data) {
+  await rm(path, { force: true }); // removes a link itself, not what it points at
+  await writeFile(path, data, { mode: 0o600, flag: 'wx' });
 }
 
 /** A Slack error as the agent should see it: the error code, never the request. */
@@ -326,10 +351,12 @@ export async function callTool(name, args = {}, ctx) {
         const got = await downloadSlackFile(url, { token, fetchFn, expectHtml: /html/i.test(file.mimetype || '') });
         if (got.error) return fail(got.error);
         // One directory per file id: nothing else sits beside it to be confused with it.
-        const dir = join(downloadRoot, id);
-        await mkdir(dir, { recursive: true, mode: 0o700 });
-        const path = join(dir, safeFileName(file.name || file.title));
-        await writeFile(path, got.bytes, { mode: 0o600 });
+        const root = await privateDir(downloadRoot);
+        if (root.error) return fail(root.error);
+        const folder = await privateDir(join(downloadRoot, id));
+        if (folder.error) return fail(folder.error);
+        const path = join(folder.path, safeFileName(file.name || file.title));
+        await writeFresh(path, got.bytes);
         const lines = [`Saved ${path}`, `${file.name || id} (${file.mimetype || file.filetype || 'unknown type'}, ${got.bytes.length} bytes)`];
         // Word, Excel and PowerPoint are zips of XML that Read cannot open, and she has no shell
         // to unzip them. The text is pulled out here and saved beside the original.
@@ -339,7 +366,7 @@ export async function callTool(name, args = {}, ctx) {
           if (extracted.error) {
             lines.push(`Could not extract its text: ${extracted.error}`);
           } else {
-            await writeFile(`${path}.txt`, extracted.text, { mode: 0o600 });
+            await writeFresh(`${path}.txt`, extracted.text);
             lines.push(`Text of the ${kind} saved to ${path}.txt${extracted.truncated ? ' (cut short: the file is long)' : ''}. Read that file.`);
           }
         } else if (isLegacyOffice(file.name || path)) {

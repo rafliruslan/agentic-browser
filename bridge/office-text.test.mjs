@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { deflateRawSync, crc32 } from 'node:zlib';
 import {
-  extractOfficeText, openZip, officeKind, isLegacyOffice, decodeXml, docxText, MAX_SHEET_ROWS,
+  extractOfficeText, openZip, officeKind, isLegacyOffice, decodeXml, docxText, sheetText,
+  MAX_SHEET_ROWS, MAX_SHEET_COLS, MAX_SLIDES,
 } from './office-text.mjs';
 
 /** A zip in memory. `files` is [name, content, { store, flags, lieSize }]. */
@@ -194,4 +195,43 @@ test('long output is cut with a note', () => {
 test('an archive entry named like a path is only ever looked up, never written', () => {
   const buf = zip([['../../evil.txt', 'x'], ['word/document.xml', W('<w:p><w:r><w:t>ok</w:t></w:r></w:p>')]]);
   assert.equal(extractOfficeText(buf, 'docx').text, 'ok');
+});
+
+// --- hostile content: time and size ----------------------------------------------
+
+test('a part of unclosed tags is read in linear time, not rescanned per tag', () => {
+  const t0 = performance.now();
+  docxText('<w:t>'.repeat(400_000));
+  sheetText(`<row r="1">${'<c r="A1"><v>1'.repeat(200_000)}`, []);
+  assert.ok(performance.now() - t0 < 3000, `took ${Math.round(performance.now() - t0)} ms`);
+});
+
+test('a tag with no end, or an endless attribute list, stops the walk without a crash', () => {
+  assert.equal(docxText(`<w:p><w:r><w:t>ok</w:t></w:r></w:p><w:t ${'a="'.repeat(50_000)}`), 'ok');
+  assert.equal(docxText('<w:p><w:r><w:t>a</w:t></w:r></w:p><!-- never closed'), 'a');
+});
+
+test('tab stops in a paragraph setting are not text', () => {
+  const xml = '<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r></w:p>';
+  assert.equal(docxText(xml), 'a\tb');
+});
+
+test('the parts of one archive share a single inflate budget', () => {
+  const mb = 'a'.repeat(1024 * 1024);
+  const { entries } = openZip(zip([['a', mb], ['b', mb], ['c', mb]]), { totalBudget: 2.5 * 1024 * 1024 });
+  entries.get('a')();
+  entries.get('b')();
+  assert.throws(() => entries.get('c')(), /in total/);
+});
+
+test('a cell far to the right is dropped with a note, not padded into a huge row', () => {
+  const out = sheetText('<row r="1"><c r="A1"><v>1</v></c><c r="XFD1"><v>2</v></c></row>', []);
+  assert.equal(out, `1\t1\n(columns past ${MAX_SHEET_COLS} not shown)`);
+});
+
+test('a deck with more slides than the limit says so', () => {
+  const slide = (t) => `<p:sld><a:p><a:r><a:t>${t}</a:t></a:r></a:p></p:sld>`;
+  const files = Array.from({ length: MAX_SLIDES + 5 }, (_, i) => [`ppt/slides/slide${i + 1}.xml`, slide(`s${i + 1}`)]);
+  const { text } = extractOfficeText(zip(files), 'pptx');
+  assert.match(text, /\(5 more slides not read\)$/);
 });

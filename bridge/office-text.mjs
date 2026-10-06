@@ -6,24 +6,36 @@
  * words without giving her Bash. Node already ships the one piece that needs
  * code, `zlib`, so there is no dependency to audit.
  *
- * The file is untrusted. Nothing here runs it: a zip is parsed by offset, entries
- * are inflated into memory with a size ceiling, and names inside the archive are
- * only ever looked up, never used as a path. Macros live in a part this never
- * opens. Text is pulled out with a few regular expressions, not a DOM, so there
- * is no entity expansion to abuse.
+ * The file is untrusted. Nothing here runs it: a zip is parsed by offset, names
+ * inside the archive are only ever looked up and never used as a path, and macros
+ * live in a part this never opens. Three ceilings bound the work a hostile file
+ * can ask for: bytes inflated per part and in total, rows and columns per sheet,
+ * and sheets and slides read. The XML is walked tag by tag with `indexOf`, so the
+ * time spent is linear in its size: a lazy regular expression over a part with
+ * unclosed tags would rescan to the end of the part for every tag, and a 64 MB
+ * part would hang the tool server. There is no DOM, so no entity expansion either.
  */
 import { inflateRawSync } from 'node:zlib';
 
 /** Most bytes one archive entry may inflate to. A big sheet is tens of MB of XML. */
 export const MAX_ENTRY_BYTES = 64 * 1024 * 1024;
 
+/** Most bytes all the parts read from one archive may inflate to, together. */
+export const MAX_TOTAL_INFLATED_BYTES = 128 * 1024 * 1024;
+
 /** Most characters of text handed back. Past this the reader gets a note, not a wall. */
 export const MAX_TEXT_CHARS = 400_000;
 
-/** Rows kept per sheet. */
+/** Rows and columns kept per sheet, and the sheets and slides read. */
 export const MAX_SHEET_ROWS = 5000;
+export const MAX_SHEET_COLS = 300;
+export const MAX_SHEETS = 50;
+export const MAX_SLIDES = 500;
 
 const MAX_ENTRIES = 20_000;
+
+/** A tag longer than this is read only as far as this: no real attribute list is longer. */
+const MAX_TAG_CHARS = 4096;
 
 /** The file kinds this reads, from the name Slack gives. Old binary formats are not among them. */
 export function officeKind(name) {
@@ -36,12 +48,25 @@ export function isLegacyOffice(name) {
   return /\.(doc|xls|ppt)$/i.test(String(name || ''));
 }
 
+/** A refusal whose message is fit to show the agent as it stands. */
+class OfficeError extends Error {}
+
+/** Raised when the parts read together would inflate past the total ceiling. */
+class BudgetError extends OfficeError {
+  constructor() {
+    super(`Refused: the file inflates to more than ${MAX_TOTAL_INFLATED_BYTES} bytes in total.`);
+  }
+}
+
 /**
  * The entries of a zip, by name, as lazy readers.
  *
+ * Each read draws on one shared budget of inflated bytes, so a file of many small
+ * claims cannot add up to more than the ceiling.
+ *
  * @returns {{ entries: Map<string, () => Buffer> } | { error: string }}
  */
-export function openZip(buf) {
+export function openZip(buf, { totalBudget = MAX_TOTAL_INFLATED_BYTES } = {}) {
   if (!Buffer.isBuffer(buf) || buf.length < 22) return { error: 'Not a zip file (too short).' };
 
   // The end-of-central-directory record sits in the last 64 KB plus 22 bytes.
@@ -59,6 +84,7 @@ export function openZip(buf) {
   if (count === 0xffff || dirOffset === 0xffffffff) return { error: 'Zip64 archives are not supported.' };
   if (count > MAX_ENTRIES) return { error: `Refused: the archive lists ${count} entries.` };
 
+  let spent = 0;
   const entries = new Map();
   let p = dirOffset;
   for (let n = 0; n < count; n++) {
@@ -75,15 +101,31 @@ export function openZip(buf) {
     p += 46 + nameLen + extraLen + commentLen;
 
     entries.set(name, () => {
-      if (flags & 1) throw new Error('The file is password-protected.');
-      if (usize > MAX_ENTRY_BYTES) throw new Error(`"${name}" is too large to read.`);
-      if (local + 30 > buf.length || buf.readUInt32LE(local) !== 0x04034b50) throw new Error('The zip is damaged.');
+      if (flags & 1) throw new OfficeError('The file is password-protected.');
+      if (usize > MAX_ENTRY_BYTES) throw new OfficeError(`"${name}" is too large to read.`);
+      if (local + 30 > buf.length || buf.readUInt32LE(local) !== 0x04034b50) throw new OfficeError('The zip is damaged.');
       const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
-      if (start + csize > buf.length) throw new Error('The zip is damaged.');
+      if (start + csize > buf.length) throw new OfficeError('The zip is damaged.');
       const raw = buf.subarray(start, start + csize);
-      if (method === 0) return Buffer.from(raw);
-      if (method === 8) return inflateRawSync(raw, { maxOutputLength: MAX_ENTRY_BYTES });
-      throw new Error(`Unsupported compression method ${method}.`);
+      let out;
+      if (method === 0) out = Buffer.from(raw);
+      else if (method === 8) {
+        // Stops at whichever ceiling is nearer, and only ever one byte past it.
+        const room = Math.min(MAX_ENTRY_BYTES, totalBudget - spent);
+        if (room <= 0) throw new BudgetError();
+        try {
+          out = inflateRawSync(raw, { maxOutputLength: room });
+        } catch (err) {
+          if (err?.code === 'ERR_BUFFER_TOO_LARGE' || err instanceof RangeError) {
+            if (room < MAX_ENTRY_BYTES) throw new BudgetError();
+            throw new OfficeError(`Refused: "${name}" inflates to more than ${MAX_ENTRY_BYTES} bytes.`);
+          }
+          throw err;
+        }
+      } else throw new OfficeError(`Unsupported compression method ${method}.`);
+      spent += out.length;
+      if (spent > totalBudget) throw new BudgetError();
+      return out;
     });
   }
   return { entries };
@@ -111,6 +153,48 @@ function attrs(tagBody) {
   return out;
 }
 
+/**
+ * Every tag of an XML part, in order, in time linear in its length.
+ *
+ * Yields { name, closing, selfClose, attrText, text }, where `text` is what sits
+ * between this tag and the next one. Comments and CDATA are skipped, as is a part
+ * that stops mid-tag.
+ */
+function* xmlTags(xml) {
+  let i = 0;
+  while (true) {
+    i = xml.indexOf('<', i);
+    if (i < 0) return;
+    if (xml.startsWith('<!--', i)) {
+      const e = xml.indexOf('-->', i + 4);
+      if (e < 0) return;
+      i = e + 3;
+      continue;
+    }
+    if (xml.startsWith('<![CDATA[', i)) {
+      const e = xml.indexOf(']]>', i + 9);
+      if (e < 0) return;
+      i = e + 3;
+      continue;
+    }
+    const end = xml.indexOf('>', i + 1);
+    if (end < 0) return;
+    const body = xml.slice(i + 1, Math.min(end, i + 1 + MAX_TAG_CHARS));
+    const m = /^(\/?)([^\s/>]+)/.exec(body);
+    const next = xml.indexOf('<', end + 1);
+    if (m) {
+      yield {
+        name: m[2],
+        closing: m[1] === '/',
+        selfClose: xml[end - 1] === '/',
+        attrText: body.slice(m[0].length),
+        text: xml.slice(end + 1, next < 0 ? xml.length : next),
+      };
+    }
+    i = end + 1;
+  }
+}
+
 const tidy = (s) =>
   s
     .replace(/[ \t]+\n/g, '\n')
@@ -120,19 +204,25 @@ const tidy = (s) =>
 /** Word: every run of text, with paragraph, line, tab and table-cell breaks kept. */
 export function docxText(xml) {
   const out = [];
-  const token = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:tab\b[^>]*\/>|<w:(?:br|cr)\b[^>]*\/>|<\/w:p>|<\/w:tc>|<\/w:tr>/g;
-  for (const m of xml.matchAll(token)) {
-    const t = m[0];
-    if (m[1] !== undefined) out.push(decodeXml(m[1]));
-    else if (t.startsWith('<w:tab')) out.push('\t');
-    else if (t === '</w:tc>') {
-      // A cell ends its last paragraph with a newline; a table row reads better on one line.
-      if (out[out.length - 1] === '\n') out.pop();
-      out.push('\t');
-    } else if (t === '</w:tr>') {
-      if (out[out.length - 1] === '\t') out.pop();
-      out.push('\n');
-    } else out.push('\n');
+  let inTabStops = false;
+  for (const t of xmlTags(xml)) {
+    if (t.name === 'w:tabs') inTabStops = !t.closing && !t.selfClose;
+    else if (t.closing) {
+      if (t.name === 'w:p') out.push('\n');
+      else if (t.name === 'w:tc') {
+        // A cell ends its last paragraph with a newline; a table row reads better on one line.
+        if (out[out.length - 1] === '\n') out.pop();
+        out.push('\t');
+      } else if (t.name === 'w:tr') {
+        if (out[out.length - 1] === '\t') out.pop();
+        out.push('\n');
+      }
+    } else if (t.name === 'w:t') {
+      if (!t.selfClose) out.push(decodeXml(t.text));
+    } else if (t.name === 'w:tab') {
+      // Tab stops in a paragraph's settings are <w:tab> too, and are not text.
+      if (!inTabStops) out.push('\t');
+    } else if (t.name === 'w:br' || t.name === 'w:cr') out.push('\n');
   }
   return tidy(out.join(''));
 }
@@ -140,64 +230,100 @@ export function docxText(xml) {
 /** PowerPoint: the text of one slide, a line per paragraph. */
 export function slideText(xml) {
   const out = [];
-  for (const m of xml.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>|<\/a:p>|<a:br\b[^>]*\/>/g)) {
-    out.push(m[1] !== undefined ? decodeXml(m[1]) : '\n');
+  for (const t of xmlTags(xml)) {
+    if (t.closing) {
+      if (t.name === 'a:p') out.push('\n');
+    } else if (t.name === 'a:t') {
+      if (!t.selfClose) out.push(decodeXml(t.text));
+    } else if (t.name === 'a:br') out.push('\n');
   }
   return tidy(out.join(''));
 }
 
 /** 0-based column from a cell reference: A is 0, Z is 25, AA is 26. */
 function columnOf(ref) {
-  const letters = /^[A-Z]+/i.exec(ref || '');
+  const letters = /^[A-Z]{1,3}/i.exec(ref || '');
   if (!letters) return -1;
   let n = 0;
   for (const ch of letters[0].toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
   return n - 1;
 }
 
-/** The text of every `<t>` in a fragment, leaving out phonetic guides. */
-function textRuns(fragment) {
-  return [...fragment.replace(/<rPh\b[\s\S]*?<\/rPh>/g, '').matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)]
-    .map((m) => decodeXml(m[1]))
-    .join('');
-}
-
+/** The shared strings of a workbook, in order, with phonetic guides left out. */
 function sharedStrings(xml) {
-  if (!xml) return [];
-  return [...xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((m) => textRuns(m[1]));
+  const out = [];
+  let cur = null;
+  let inGuide = false;
+  for (const t of xmlTags(xml)) {
+    if (t.name === 'si') {
+      if (t.closing || t.selfClose) {
+        out.push(cur ?? '');
+        cur = null;
+      } else cur = '';
+    } else if (t.name === 'rPh') inGuide = !t.closing && !t.selfClose;
+    else if (t.name === 't' && !t.closing && !t.selfClose && cur !== null && !inGuide) cur += decodeXml(t.text);
+  }
+  return out;
 }
 
 /** One worksheet as tab-separated rows, each led by its row number. */
 export function sheetText(xml, shared) {
   const rows = [];
   let skipped = 0;
-  for (const rm of xml.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)) {
-    if (rm[2] === undefined) continue;
-    const rowNo = attrs(rm[1]).r || '';
-    const cells = [];
-    for (const cm of rm[2].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
-      const a = attrs(cm[1]);
-      const body = cm[2] || '';
-      const v = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body);
-      let value = '';
-      if (a.t === 'inlineStr') value = textRuns(body);
-      else if (a.t === 's') value = v ? shared[Number(v[1])] ?? '' : '';
-      else if (a.t === 'b') value = v ? (v[1] === '1' ? 'TRUE' : 'FALSE') : '';
-      else if (v) value = decodeXml(v[1]);
-      if (value === '') continue;
-      const col = columnOf(a.r);
-      const at = col >= 0 ? col : cells.length;
-      while (cells.length < at) cells.push('');
-      cells[at] = value.replace(/[\t\r\n]+/g, ' ');
+  let narrowed = false;
+  let rowNo = '';
+  let cells = null;
+  let cell = null;
+  let inlineText = false;
+
+  const finishCell = () => {
+    const { a, v, inline } = cell;
+    cell = null;
+    let value = '';
+    if (a.t === 'inlineStr') value = inline;
+    else if (a.t === 's') value = shared[Number(v)] ?? '';
+    else if (a.t === 'b') value = v === '' ? '' : v === '1' ? 'TRUE' : 'FALSE';
+    else value = decodeXml(v);
+    if (value === '') return;
+    const col = columnOf(a.r);
+    const at = col >= 0 ? col : cells.length;
+    if (at >= MAX_SHEET_COLS) {
+      narrowed = true;
+      return;
     }
-    if (!cells.length) continue;
-    if (rows.length >= MAX_SHEET_ROWS) {
-      skipped++;
-      continue;
-    }
-    rows.push(`${rowNo}\t${cells.join('\t')}`);
+    while (cells.length < at) cells.push('');
+    cells[at] = value.replace(/[\t\r\n]+/g, ' ');
+  };
+
+  for (const t of xmlTags(xml)) {
+    if (t.name === 'row') {
+      if (t.closing) {
+        if (cells?.length) {
+          if (rows.length >= MAX_SHEET_ROWS) skipped++;
+          else rows.push(`${rowNo}\t${cells.join('\t')}`);
+        }
+        cells = null;
+      } else if (!t.selfClose) {
+        rowNo = attrs(t.attrText).r || '';
+        cells = [];
+      }
+    } else if (!cells) continue;
+    else if (t.name === 'c') {
+      if (t.closing) {
+        if (cell) finishCell();
+      } else {
+        if (cell) finishCell(); // a cell left open by a damaged file
+        cell = { a: attrs(t.attrText), v: '', inline: '' };
+        if (t.selfClose) cell = null;
+      }
+    } else if (!cell) continue;
+    else if (t.name === 'v') {
+      if (!t.closing && !t.selfClose) cell.v = t.text;
+    } else if (t.name === 'is') inlineText = !t.closing && !t.selfClose;
+    else if (t.name === 't' && inlineText && !t.closing && !t.selfClose) cell.inline += decodeXml(t.text);
   }
   if (skipped) rows.push(`(${skipped} more rows not shown)`);
+  if (narrowed) rows.push(`(columns past ${MAX_SHEET_COLS} not shown)`);
   return rows.join('\n');
 }
 
@@ -206,13 +332,15 @@ function workbookSheets(entries, read) {
   const wb = entries.has('xl/workbook.xml') ? read('xl/workbook.xml') : '';
   const rels = entries.has('xl/_rels/workbook.xml.rels') ? read('xl/_rels/workbook.xml.rels') : '';
   const target = new Map();
-  for (const m of rels.matchAll(/<Relationship\b([^>]*?)\/?>/g)) {
-    const a = attrs(m[1]);
+  for (const t of xmlTags(rels)) {
+    if (t.name !== 'Relationship' || t.closing) continue;
+    const a = attrs(t.attrText);
     if (a.Id && a.Target) target.set(a.Id, a.Target.startsWith('/') ? a.Target.slice(1) : `xl/${a.Target}`);
   }
   const sheets = [];
-  for (const m of wb.matchAll(/<sheet\b([^>]*?)\/?>/g)) {
-    const a = attrs(m[1]);
+  for (const t of xmlTags(wb)) {
+    if (t.name !== 'sheet' || t.closing) continue;
+    const a = attrs(t.attrText);
     const path = target.get(a['r:id']);
     if (path && entries.has(path)) sheets.push({ name: a.name || path, path, hidden: a.state && a.state !== 'visible' });
   }
@@ -238,6 +366,7 @@ export function extractOfficeText(buf, kind, { maxChars = MAX_TEXT_CHARS } = {})
       if (!entries.has('word/document.xml')) return { error: 'This is not a Word document (no word/document.xml).' };
       const extras = [...entries.keys()]
         .filter((n) => /^word\/(header|footer|footnotes|endnotes)\d*\.xml$/.test(n))
+        .slice(0, MAX_SHEETS)
         .map((n) => {
           const t = docxText(read(n));
           return t && `[${n.slice(5, -4)}] ${t}`;
@@ -245,30 +374,42 @@ export function extractOfficeText(buf, kind, { maxChars = MAX_TEXT_CHARS } = {})
       text = [docxText(read('word/document.xml')), ...extras].filter(Boolean).join('\n\n');
     } else if (kind === 'pptx') {
       const num = (n) => Number(/(\d+)\.xml$/.exec(n)?.[1] || 0);
-      const slides = [...entries.keys()].filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n)).sort((a, b) => num(a) - num(b));
-      if (!slides.length) return { error: 'This is not a PowerPoint file (no slides found).' };
-      text = slides
-        .map((n) => {
-          const notes = `ppt/notesSlides/notesSlide${num(n)}.xml`;
-          const body = slideText(read(n));
-          const note = entries.has(notes) ? slideText(read(notes)) : '';
-          return `--- Slide ${num(n)} ---\n${body}${note ? `\n[Speaker notes] ${note}` : ''}`;
-        })
-        .join('\n\n');
+      const all = [...entries.keys()].filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n)).sort((a, b) => num(a) - num(b));
+      if (!all.length) return { error: 'This is not a PowerPoint file (no slides found).' };
+      const parts = [];
+      let size = 0;
+      for (const n of all.slice(0, MAX_SLIDES)) {
+        const notes = `ppt/notesSlides/notesSlide${num(n)}.xml`;
+        const body = slideText(read(n));
+        const note = entries.has(notes) ? slideText(read(notes)) : '';
+        const part = `--- Slide ${num(n)} ---\n${body}${note ? `\n[Speaker notes] ${note}` : ''}`;
+        parts.push(part);
+        size += part.length;
+        if (size > maxChars) break; // the rest would be cut anyway
+      }
+      if (all.length > parts.length) parts.push(`(${all.length - parts.length} more slides not read)`);
+      text = parts.join('\n\n');
     } else if (kind === 'xlsx') {
       const sheets = workbookSheets(entries, read);
       if (!sheets.length) return { error: 'This is not an Excel workbook (no sheets found).' };
       const shared = sharedStrings(entries.has('xl/sharedStrings.xml') ? read('xl/sharedStrings.xml') : '');
+      const parts = [];
+      let size = 0;
+      for (const s of sheets.slice(0, MAX_SHEETS)) {
+        const part = `=== Sheet: ${s.name}${s.hidden ? ' (hidden)' : ''} ===\n${sheetText(read(s.path), shared) || '(empty)'}`;
+        parts.push(part);
+        size += part.length;
+        if (size > maxChars) break;
+      }
+      if (sheets.length > parts.length) parts.push(`(${sheets.length - parts.length} more sheets not read)`);
       text =
-        sheets.map((s) => `=== Sheet: ${s.name}${s.hidden ? ' (hidden)' : ''} ===\n${sheetText(read(s.path), shared) || '(empty)'}`).join('\n\n') +
+        parts.join('\n\n') +
         '\n\nRows start with their row number. Formulas show their last saved result. Dates appear as Excel serial numbers (days since 1899-12-30).';
     } else {
       return { error: `Unsupported kind ${kind}.` };
     }
   } catch (err) {
-    if (err?.code === 'ERR_BUFFER_TOO_LARGE' || err instanceof RangeError) {
-      return { error: `Refused: a part of the file inflates to more than ${MAX_ENTRY_BYTES} bytes.` };
-    }
+    if (err instanceof OfficeError) return { error: err.message };
     return { error: `Could not read the file: ${err?.message || 'unknown error'}.` };
   }
 

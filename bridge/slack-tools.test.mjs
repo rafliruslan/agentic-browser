@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, symlink, lstat } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import { TOOLS, callTool, parseEnv, safeUploadPath, slackError, safeFileName, downloadSlackFile } from './slack-tools.mjs';
+import { TOOLS, callTool, parseEnv, safeUploadPath, slackError, safeFileName, downloadSlackFile, privateDir } from './slack-tools.mjs';
 
 const TOKEN = 'xoxb-000000000000-SECRET-DO-NOT-LEAK';
 
@@ -309,4 +309,54 @@ test('file on a .xlsx that is not a zip still saves it and explains the failure'
   assert.equal(r.isError, undefined);
   assert.match(r.content[0].text, /Could not extract its text: Not a zip/);
   assert.equal(await readFile(join(root, 'F0ABC12345', 'x.xlsx'), 'utf8'), 'this is not a zip file!!');
+});
+
+// --- where downloads are written ---------------------------------------------------
+
+const pdfFile = () => ({ id: 'F0ABC12345', name: 'a.pdf', mimetype: 'application/pdf', size: 3, url_private_download: FILE_URL });
+const pdfFetch = () => async () => new Response('new', { status: 200, headers: { 'content-type': 'application/pdf' } });
+
+test('a link planted where the download folder should be is refused, and nothing is written through it', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'dl-'));
+  const victim = join(base, 'victim');
+  await mkdir(victim);
+  const root = join(base, 'slack-files');
+  await symlink(victim, root);
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(withFile(pdfFile()), { token: TOKEN, downloadRoot: root, fetchFn: pdfFetch() }));
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /not a plain directory/);
+  assert.deepEqual(await (await import('node:fs/promises')).readdir(victim), []);
+});
+
+test('a link planted at the file name is replaced, not followed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const secret = join(root, 'secret.txt');
+  await writeFile(secret, 'keep me');
+  await mkdir(join(root, 'F0ABC12345'));
+  await symlink(secret, join(root, 'F0ABC12345', 'a.pdf'));
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(withFile(pdfFile()), { token: TOKEN, downloadRoot: root, fetchFn: pdfFetch() }));
+  assert.equal(r.isError, undefined);
+  assert.equal(await readFile(secret, 'utf8'), 'keep me');
+  const saved = join(root, 'F0ABC12345', 'a.pdf');
+  assert.equal((await lstat(saved)).isSymbolicLink(), false);
+  assert.equal(await readFile(saved, 'utf8'), 'new');
+});
+
+test('a download folder left open to others is closed to them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const dir = join(root, 'open');
+  await mkdir(dir, { mode: 0o755 });
+  const r = await privateDir(dir);
+  assert.equal(r.error, undefined);
+  assert.equal((await lstat(dir)).mode & 0o077, 0);
+});
+
+test('fetching the same file twice replaces it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  for (const body of ['one', 'two']) {
+    const fetchFn = async () => new Response(body, { status: 200, headers: { 'content-type': 'application/pdf' } });
+    const r = await callTool('file', { file: 'F0ABC12345' }, ctx(withFile(pdfFile()), { token: TOKEN, downloadRoot: root, fetchFn }));
+    assert.equal(r.isError, undefined);
+  }
+  assert.equal(await readFile(join(root, 'F0ABC12345', 'a.pdf'), 'utf8'), 'two');
 });
