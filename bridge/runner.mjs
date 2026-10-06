@@ -24,6 +24,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createMirror, splitLines, resultOf } from './mirror.mjs';
 import { appendRun, indexPathFor } from './runs-index.mjs';
 import { fileURLToPath } from 'node:url';
@@ -146,7 +147,12 @@ export function buildArgs({ prompt, sessionId, isNew, model, effort, permissionM
   // Every run is fenced, the same way every run gets the denylist: applied
   // here so no caller can forget it. Passed as settings on the command line,
   // so the workspace's own settings file is neither edited nor relied on.
-  args.push('--settings', JSON.stringify(fenceSettings(FENCE_HOOK)));
+  // AGENT_EXTRA_SETTINGS adds a second agent's own rules. A file that is set but
+  // unreadable throws: that agent must never run without its fence.
+  const extra = process.env.AGENT_EXTRA_SETTINGS
+    ? JSON.parse(readFileSync(process.env.AGENT_EXTRA_SETTINGS, 'utf8'))
+    : null;
+  args.push('--settings', JSON.stringify(fenceSettings(FENCE_HOOK, process.execPath, extra)));
 
   return args;
 }

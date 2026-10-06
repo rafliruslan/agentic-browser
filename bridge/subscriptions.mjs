@@ -26,7 +26,9 @@ import { homedir } from 'node:os';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const DEFAULT_SUBS_PATH = join(
-  homedir(), '.local', 'state', 'agentic-browser', 'subscriptions.json',
+  process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'),
+  'agentic-browser',
+  'subscriptions.json',
 );
 
 export function createSubscriptionStore({

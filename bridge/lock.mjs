@@ -28,7 +28,9 @@ import { dirname, join } from 'node:path';
 import { homedir, hostname, uptime } from 'node:os';
 
 export const DEFAULT_LOCK_PATH = join(
-  homedir(), '.local', 'state', 'agentic-browser', 'bridge.lock',
+  process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'),
+  'agentic-browser',
+  'bridge.lock',
 );
 
 /** True if a process with this pid exists and we may signal it. */

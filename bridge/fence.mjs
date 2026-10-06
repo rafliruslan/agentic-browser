@@ -81,9 +81,15 @@ export function fence(event, { nonce = randomBytes(8).toString('hex') } = {}) {
   };
 }
 
-/** The settings a run is given, so the hook is attached without editing any file. */
-export function fenceSettings(hookPath, nodePath = process.execPath) {
-  return {
+/**
+ * The settings a run is given, so the hook is attached without editing any file.
+ *
+ * `extra` is a second agent's own rules, loaded from a file outside its
+ * workspace so the agent cannot rewrite them: hook lists and permission lists
+ * are appended to ours, never replacing them.
+ */
+export function fenceSettings(hookPath, nodePath = process.execPath, extra = null) {
+  const base = {
     hooks: {
       PostToolUse: [
         {
@@ -93,4 +99,13 @@ export function fenceSettings(hookPath, nodePath = process.execPath) {
       ],
     },
   };
+  if (!extra) return base;
+  for (const [event, entries] of Object.entries(extra.hooks || {})) {
+    base.hooks[event] = [...(base.hooks[event] || []), ...entries];
+  }
+  if (extra.permissions) {
+    base.permissions = {};
+    for (const [kind, rules] of Object.entries(extra.permissions)) base.permissions[kind] = [...rules];
+  }
+  return base;
 }
