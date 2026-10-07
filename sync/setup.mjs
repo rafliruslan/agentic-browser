@@ -112,7 +112,15 @@ function writeInfo(store) {
 }
 
 export function prepareStore(store, { machine, state, log = console.log }) {
-  const g = storeGit(store);
+  const run = storeGit(store);
+  // Every git step must succeed: a failed add would otherwise push an empty
+  // first copy, and a failed diff would skip the secret scan.
+  const g = (args, opts) => {
+    const r = run(args, opts);
+    if (r.code !== 0) throw new Error(`git ${args.find((a) => !a.startsWith('-') && !a.includes('=')) ?? args[0]} failed for ${store.name}: ${r.stderr.trim().split('\n')[0]}`);
+    return r;
+  };
+  const probe = run; // for calls whose failure is an answer, not an error
   const as = ['-c', 'user.name=agent-sync', '-c', `user.email=agent-sync@${machine}`];
   const gitDir = store.gitDir ?? join(store.workTree, '.git');
 
@@ -166,26 +174,23 @@ export function prepareStore(store, { machine, state, log = console.log }) {
   }
   g([...as, 'commit', '-q', '--allow-empty', '-m', `first sync from ${machine}`]);
 
-  const fetched = g(['fetch', '-q', 'origin']);
-  if (fetched.code !== 0) throw new Error(`fetch ${store.name}: ${fetched.stderr.trim()}`);
-  const remoteHas = g(['rev-parse', '-q', '--verify', `origin/${store.branch}`]).code === 0;
+  g(['fetch', '-q', 'origin']);
+  const remoteHas = probe(['rev-parse', '-q', '--verify', `origin/${store.branch}`]).code === 0;
   if (!remoteHas) {
-    const p = g(['push', '-q', '-u', 'origin', `HEAD:${store.branch}`]);
-    if (p.code !== 0) throw new Error(`push ${store.name}: ${p.stderr.trim()}`);
+    g(['push', '-q', '-u', 'origin', `HEAD:${store.branch}`]);
     log(`${store.name}: first copy pushed`);
     return 'initialised';
   }
-  const m = g([...as, 'merge', '--no-edit', '-q', '--allow-unrelated-histories', `origin/${store.branch}`]);
+  const m = probe([...as, 'merge', '--no-edit', '-q', '--allow-unrelated-histories', `origin/${store.branch}`]);
   if (m.code !== 0) {
-    const conflicted = g(['diff', '--name-only', '--diff-filter=U']).stdout.split('\n').filter(Boolean);
-    g(['merge', '--abort']);
+    const conflicted = probe(['diff', '--name-only', '--diff-filter=U']).stdout.split('\n').filter(Boolean);
+    probe(['merge', '--abort']);
     state.stop(store.name, `first merge conflicts in ${conflicted.join(', ')}; resolve, then: node sync/sync.mjs --resume ${store.name}`);
     log(`${store.name}: stopped on first merge`);
     return 'stopped';
   }
   g(['branch', '-q', '--set-upstream-to', `origin/${store.branch}`]);
-  const p = g(['push', '-q', 'origin', `HEAD:${store.branch}`]);
-  if (p.code !== 0) throw new Error(`push ${store.name}: ${p.stderr.trim()}`);
+  g(['push', '-q', 'origin', `HEAD:${store.branch}`]);
   log(`${store.name}: merged with the copy already on the remote`);
   return 'merged';
 }

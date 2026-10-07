@@ -91,8 +91,13 @@ export function syncStore(store, ctx) {
       if (ok(['rev-list', '--count', `${upstream}..HEAD`]).trim() === '0') return { status: 'ok' };
       // Every commit about to leave, including ones an agent made by itself
       // without the sync: a token removed in a later commit is still in history.
-      const outgoing = ok(['-c', 'core.quotepath=false', 'log', '-p', '--text', '-U0', '--no-color', '--format=', `${upstream}..HEAD`]);
-      const leaving = findSecrets(outgoing);
+      // `log -p` shows no diff for merge commits, so a token typed while
+      // resolving a merge by hand is caught by the net diff instead.
+      const q = ['-c', 'core.quotepath=false'];
+      const leaving = [
+        ...findSecrets(ok([...q, 'log', '-p', '--text', '-U0', '--no-color', '--format=', `${upstream}..HEAD`])),
+        ...findSecrets(ok([...q, 'diff', '--text', '-U0', '--no-color', upstream, 'HEAD'])),
+      ];
       if (leaving.length) {
         const list = [...new Set(leaving.map((h) => `${h.file} (${h.pattern})`))].join(', ');
         return stop(`possible secret in an unpushed commit: ${list}; rewrite those commits locally, ${RESUME(store.name)}`);

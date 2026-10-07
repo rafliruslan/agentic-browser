@@ -189,3 +189,21 @@ test('a token inside a file git calls binary is still caught', () => {
   assert.equal(res.status, 'stopped');
   assert.match(res.detail, /notes\/blob\.dat \(slack-token\)/);
 });
+
+test('a token added while resolving a merge by hand is never pushed', () => {
+  const r = rig();
+  const a = r.clone('a'); const b = r.clone('b');
+  r.write(b, 'notes/a.md', 'one\nTWO-B\nthree\n');
+  syncStore(r.store(b), ctx(r.state('b')));
+  r.write(a, 'notes/a.md', 'one\nTWO-A\nthree\n');
+  r.sh(a, 'commit', '-q', '-am', 'local edit');
+  r.sh(a, 'fetch', '-q');
+  try { r.sh(a, 'merge', '-q', 'origin/main'); } catch { /* conflict expected */ }
+  r.write(a, 'notes/a.md', `one\nTWO ${'glpat-' + 'a'.repeat(20)}\nthree\n`);
+  r.sh(a, 'add', '-A');
+  r.sh(a, 'commit', '-q', '--no-edit');
+  const res = syncStore(r.store(a), ctx(r.state('a')));
+  assert.equal(res.status, 'stopped');
+  assert.match(res.detail, /gitlab-token/);
+  assert.ok(!r.read(r.clone('c'), 'notes/a.md').includes('glpat-'));
+});

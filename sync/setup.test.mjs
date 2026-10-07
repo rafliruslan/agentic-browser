@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readlinkSync, realpathSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readlinkSync, realpathSync, existsSync, readFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { git } from './git.mjs';
@@ -114,4 +114,21 @@ test('a missing work tree is cloned', () => {
   assert.equal(prepareStore(store, { machine: 'x', state: r.state('x'), log: () => {} }), 'cloned');
   assert.ok(existsSync(join(target, 'notes/a.md')));
   assert.match(readFileSync(join(target, '.git', 'info', 'attributes'), 'utf8'), /merge=union/);
+});
+
+test('setup stops on a git error instead of pushing an empty first copy', () => {
+  const root = tmp();
+  const remote = join(root, 'r.git');
+  git(['init', '-q', '--bare', '-b', 'main', remote], { cwd: root });
+  const work = join(root, 'w');
+  mkdirSync(work);
+  writeFileSync(join(work, 'locked.md'), 'x\n');
+  chmodSync(join(work, 'locked.md'), 0o000);
+  const store = { name: 'tara', workTree: work, gitDir: null, remote, branch: 'main', mode: 'readwrite', aside: false, relativeLinks: false };
+  try {
+    assert.throws(() => prepareStore(store, { machine: 't', state: createState(join(root, 'state')), log: () => {} }), /git add failed/);
+    assert.equal(git(['ls-remote', '--heads', remote], { cwd: root }).stdout, '', 'nothing pushed');
+  } finally {
+    chmodSync(join(work, 'locked.md'), 0o644);
+  }
 });
