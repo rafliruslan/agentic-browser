@@ -15,6 +15,14 @@ export const PATTERNS = [
   ['aws-key', /\bAKIA[0-9A-Z]{16}\b/],
   ['google-api-key', /\bAIza[0-9A-Za-z_-]{35}/],
   ['private-key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  ['stripe-key', /\b[rs]k_(?:live|test)_[A-Za-z0-9]{20,}/],
+  ['slack-webhook', /https:\/\/hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/],
+  ['jwt', /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/],
+  ['npm-token', /\bnpm_[A-Za-z0-9]{36}\b/],
+  ['telegram-bot-token', /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/],
+  // A value after a secret-ish label, but only one that looks generated: long,
+  // with both letters and digits, so prose after "token:" does not fire.
+  ['assigned-secret', /\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)["']?\s*[:=]\s*["']?(?=[^\s"']*\d)(?=[^\s"']*[A-Za-z])[^\s"']{16,}/i],
 ];
 
 export const scanText = (text) => PATTERNS.filter(([, re]) => re.test(text)).map(([name]) => name);

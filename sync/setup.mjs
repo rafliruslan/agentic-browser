@@ -157,7 +157,7 @@ export function prepareStore(store, { machine, state, log = console.log }) {
   }
 
   g(['add', '-A']);
-  const hits = findSecrets(g(['-c', 'core.quotepath=false', 'diff', '--cached', '-U0', '--no-color']).stdout);
+  const hits = findSecrets(g(['-c', 'core.quotepath=false', 'diff', '--cached', '--text', '-U0', '--no-color']).stdout);
   if (hits.length) {
     g(['reset', '-q']);
     state.stop(store.name, `possible secret in ${hits.map((h) => `${h.file} (${h.pattern})`).join(', ')}; remove it, then run setup again and: node sync/sync.mjs --resume ${store.name}`);

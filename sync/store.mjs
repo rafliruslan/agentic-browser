@@ -53,7 +53,7 @@ export function syncStore(store, ctx) {
 
     if (store.mode === 'readwrite') {
       ok(['add', '-A']);
-      const diff = ok(['-c', 'core.quotepath=false', 'diff', '--cached', '-U0', '--no-color']);
+      const diff = ok(['-c', 'core.quotepath=false', 'diff', '--cached', '--text', '-U0', '--no-color']);
       const hits = findSecrets(diff);
       if (hits.length) {
         g(['reset', '-q']);
@@ -89,6 +89,14 @@ export function syncStore(store, ctx) {
 
       if (store.mode === 'pull') return { status: 'ok' };
       if (ok(['rev-list', '--count', `${upstream}..HEAD`]).trim() === '0') return { status: 'ok' };
+      // Every commit about to leave, including ones an agent made by itself
+      // without the sync: a token removed in a later commit is still in history.
+      const outgoing = ok(['-c', 'core.quotepath=false', 'log', '-p', '--text', '-U0', '--no-color', '--format=', `${upstream}..HEAD`]);
+      const leaving = findSecrets(outgoing);
+      if (leaving.length) {
+        const list = [...new Set(leaving.map((h) => `${h.file} (${h.pattern})`))].join(', ');
+        return stop(`possible secret in an unpushed commit: ${list}; rewrite those commits locally, ${RESUME(store.name)}`);
+      }
       if (attempt === 0) ctx.beforePush?.();
       const pushed = g(['push', '-q', 'origin', `HEAD:${store.branch}`]);
       if (pushed.code === 0) return { status: 'ok' };

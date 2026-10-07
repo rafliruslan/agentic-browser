@@ -166,3 +166,26 @@ test('an Aside run based on the synced version changes nothing', () => {
   assert.equal(syncStore(asideStore, ctx(sa)).status, 'ok');
   assert.equal(r.read(a, 'n.md'), 'a\nb\n');
 });
+
+test('a token in a commit made outside the sync is never pushed', () => {
+  const r = rig();
+  const a = r.clone('a');
+  r.write(a, 'notes/hand.md', `key ${'ghp_' + 'a'.repeat(36)}\n`);
+  r.sh(a, 'add', '-A');
+  r.sh(a, 'commit', '-q', '-m', 'an agent committed this itself');
+  r.write(a, 'notes/hand.md', 'cleaned\n');
+  r.sh(a, 'commit', '-q', '-am', 'and removed it later');
+  const res = syncStore(r.store(a), ctx(r.state('a')));
+  assert.equal(res.status, 'stopped');
+  assert.match(res.detail, /notes\/hand\.md \(github-token\)/);
+  assert.ok(!existsSync(join(r.clone('c'), 'notes/hand.md')), 'nothing pushed');
+});
+
+test('a token inside a file git calls binary is still caught', () => {
+  const r = rig();
+  const a = r.clone('a');
+  r.write(a, 'notes/blob.dat', `\u0000\u0001 xoxb-${'1'.repeat(30)} \u0000`);
+  const res = syncStore(r.store(a), ctx(r.state('a')));
+  assert.equal(res.status, 'stopped');
+  assert.match(res.detail, /notes\/blob\.dat \(slack-token\)/);
+});

@@ -59,3 +59,22 @@ test('a content line starting with ++ is content, not a header', () => {
   const d = diff('a.md', ['++ not a header', fake('ghp_', 36)]);
   assert.deepEqual(findSecrets(d), [{ file: 'a.md', pattern: 'github-token' }]);
 });
+
+test('common token shapes beyond the first list', () => {
+  const cases = {
+    'stripe-key': fake('sk_live_', 24),
+    'slack-webhook': `https://hooks.slack.com/services/T${'0'.repeat(8)}/B${'0'.repeat(8)}/${'a'.repeat(24)}`,
+    jwt: `eyJ${'a'.repeat(20)}.eyJ${'b'.repeat(20)}.${'c'.repeat(20)}`,
+    'npm-token': fake('npm_', 36),
+    'telegram-bot-token': `123456789:${'A'.repeat(35)}`,
+    'assigned-secret': `api_key = "${'a1'.repeat(10)}"`,
+  };
+  for (const [name, value] of Object.entries(cases)) {
+    assert.ok(scanText(`x ${value} y`).includes(name), name);
+  }
+});
+
+test('words after a secret-ish label are not a secret', () => {
+  assert.deepEqual(scanText('token: never read it yourself, confidential always'), []);
+  assert.deepEqual(scanText('password: ask Proton Pass, do not store passwords here'), []);
+});
