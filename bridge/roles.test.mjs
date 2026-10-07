@@ -58,7 +58,9 @@ test('the teammate note names who is asking and the limits; the operator gets no
   assert.match(note, /teammate \(Slack user U_A\), not from Rafli/);
   assert.match(note, /credentials, Proton Pass items/);
   assert.match(note, /bank details/);
+  assert.match(note, /Shopify order.*delivery details.*Nothing else about the customer/);
   assert.match(note, /DM him/);
+  assert.match(note, /Anything sexual in nature.*needs Rafli's yes first/);
   assert.match(note, /Linear tools \(mcp__linear\)/);
   assert.match(note, /Never use the browser for Linear/);
 });
