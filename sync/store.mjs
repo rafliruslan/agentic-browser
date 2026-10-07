@@ -11,6 +11,24 @@ import {
   readNewRuns, findLostUpdates, mergeLostUpdate, writesFromMerge, pruneWrites, sha256,
 } from './aside-guard.mjs';
 
+// git's empty tree: the base for "everything in this history".
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+/** Token-shaped text in anything a push would send: diffs, merge resolutions, messages. */
+function outgoingSecrets(ok, upstream) {
+  const q = ['-c', 'core.quotepath=false'];
+  const range = upstream ? `${upstream}..HEAD` : 'HEAD';
+  return [
+    ...findSecrets(ok([...q, 'log', '-p', '--text', '-U0', '--no-color', '--format=', range])),
+    // `log -p` shows no diff for merge commits, so a token typed while
+    // resolving a merge by hand is caught by the net diff instead.
+    ...findSecrets(ok([...q, 'diff', '--text', '-U0', '--no-color', upstream ?? EMPTY_TREE, 'HEAD'])),
+    ...scanText(ok(['log', '--format=%B', range])).map((pattern) => ({ file: 'a commit message', pattern })),
+  ];
+}
+
+const listHits = (hits) => [...new Set(hits.map((h) => `${h.file} (${h.pattern})`))].join(', ');
+
 const firstLine = (s) => String(s).trim().split('\n')[0].slice(0, 200);
 const RESUME = (name) => `then run: node sync/sync.mjs --resume ${name}`;
 
@@ -27,6 +45,10 @@ export function syncStore(store, ctx) {
 
   const already = state.stopped(store.name);
   if (already) return { status: 'stopped', detail: already };
+  const markSynced = () => {
+    const m = state.store(store.name);
+    if (!m.synced) state.saveStore(store.name, { ...m, synced: true });
+  };
   const stop = (reason) => {
     state.stop(store.name, reason);
     ctx.notify?.(`Memory sync stopped: ${store.name}`, reason);
@@ -74,8 +96,12 @@ export function syncStore(store, ctx) {
       if (fetched.code !== 0) {
         // The first push never happened (setup stopped after init): make it now.
         if (store.mode === 'readwrite' && /couldn't find remote ref/i.test(fetched.stderr)) {
+          const hits = outgoingSecrets(ok, null);
+          if (hits.length) return stop(`possible secret in an unpushed commit: ${listHits(hits)}; rewrite those commits locally, ${RESUME(store.name)}`);
           const first = g(['push', '-q', '-u', 'origin', `HEAD:${store.branch}`]);
-          return first.code === 0 ? { status: 'ok' } : { status: 'offline', detail: firstLine(first.stderr) };
+          if (first.code !== 0) return { status: 'offline', detail: firstLine(first.stderr) };
+          markSynced();
+          return { status: 'ok' };
         }
         return { status: 'offline', detail: firstLine(fetched.stderr) };
       }
@@ -85,6 +111,11 @@ export function syncStore(store, ctx) {
       // No common ancestor means the first merge never happened (setup stopped
       // after init); allow it once, the way setup would have.
       const unrelated = g(['merge-base', 'HEAD', upstream]).code !== 0 ? ['--allow-unrelated-histories'] : [];
+      // After a first good sync, no common history means the remote was
+      // replaced or the URL is wrong: never merge a stranger's files in.
+      if (unrelated.length && state.store(store.name).synced) {
+        return stop(`the remote has no history in common with this copy; check the remote URL, ${RESUME(store.name)}`);
+      }
       const merged = store.mode === 'pull'
         ? g(['merge', '--ff-only', '-q', upstream])
         : g([...as, 'merge', '--no-edit', '-q', ...unrelated, upstream]);
@@ -101,6 +132,7 @@ export function syncStore(store, ctx) {
           : `merge failed: ${firstLine(merged.stderr)}; ${RESUME(store.name)}`);
       }
       const after = ok(['rev-parse', 'HEAD']).trim();
+      markSynced();
       if (store.aside && after !== before) {
         const mem = state.store(store.name);
         mem.writes = [...pruneWrites(mem.writes, now()), ...writesFromMerge(g, before, after, now())];
@@ -111,17 +143,9 @@ export function syncStore(store, ctx) {
       if (ok(['rev-list', '--count', `${upstream}..HEAD`]).trim() === '0') return { status: 'ok' };
       // Every commit about to leave, including ones an agent made by itself
       // without the sync: a token removed in a later commit is still in history.
-      // `log -p` shows no diff for merge commits, so a token typed while
-      // resolving a merge by hand is caught by the net diff instead.
-      const q = ['-c', 'core.quotepath=false'];
-      const leaving = [
-        ...findSecrets(ok([...q, 'log', '-p', '--text', '-U0', '--no-color', '--format=', `${upstream}..HEAD`])),
-        ...findSecrets(ok([...q, 'diff', '--text', '-U0', '--no-color', upstream, 'HEAD'])),
-        ...scanText(ok(['log', '--format=%B', `${upstream}..HEAD`])).map((pattern) => ({ file: 'a commit message', pattern })),
-      ];
+      const leaving = outgoingSecrets(ok, upstream);
       if (leaving.length) {
-        const list = [...new Set(leaving.map((h) => `${h.file} (${h.pattern})`))].join(', ');
-        return stop(`possible secret in an unpushed commit: ${list}; rewrite those commits locally, ${RESUME(store.name)}`);
+        return stop(`possible secret in an unpushed commit: ${listHits(leaving)}; rewrite those commits locally, ${RESUME(store.name)}`);
       }
       if (attempt === 0) ctx.beforePush?.();
       const pushed = g(['push', '-q', 'origin', `HEAD:${store.branch}`]);

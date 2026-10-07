@@ -9,7 +9,7 @@
 import { readFileSync, unlinkSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { acquire, release } from '../bridge/lock.mjs';
+import { acquire, release, isAlive } from '../bridge/lock.mjs';
 import { loadConfig } from './config.mjs';
 import { createState, stateDir } from './state.mjs';
 import { syncStore } from './store.mjs';
@@ -49,10 +49,11 @@ export async function main(argv, {
   }
   // The lock lives in this machine's own state folder, so a lock naming another
   // host is ours from before the host name changed (macOS renames itself with
-  // the network). The bridge lock's cross-host caution does not apply here.
+  // the network). Cleared only when its process is gone: a pass still running
+  // when the name changed keeps its lock.
   try {
     const held = JSON.parse(readFileSync(state.lockPath, 'utf8'));
-    if (held.host && held.host !== hostname()) unlinkSync(state.lockPath);
+    if (held.host && held.host !== hostname() && !isAlive(held.pid)) unlinkSync(state.lockPath);
   } catch { /* no lock, or unreadable: acquire decides */ }
   const lock = await acquire({ path: state.lockPath });
   if (!lock.ok) {

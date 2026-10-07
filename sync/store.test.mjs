@@ -298,3 +298,35 @@ test("Aside overwriting the guard's own repair is repaired again", () => {
   assert.equal(syncStore(st, ctx(sa, { now })).status, 'ok');
   assert.equal(r.read(a, 'n.md'), 'A\nb\nC\nd\nE\n');
 });
+
+test('the first push is scanned like any other', () => {
+  const r = rig();
+  const remote = join(r.root, 'empty2.git');
+  r.sh(r.root, 'init', '-q', '--bare', '-b', 'main', remote);
+  const w = join(r.root, 'w2');
+  r.sh(r.root, 'init', '-q', '-b', 'main', w);
+  r.write(w, 'n.md', `key ${'ghp_' + 'a'.repeat(36)}\n`);
+  r.sh(w, 'add', '-A'); r.sh(w, 'commit', '-q', '-m', 'first');
+  r.sh(w, 'remote', 'add', 'origin', remote);
+  const res = syncStore(r.store(w, { remote }), ctx(r.state('w2')));
+  assert.equal(res.status, 'stopped');
+  assert.equal(r.sh(r.root, 'ls-remote', '--heads', remote), '', 'nothing pushed');
+});
+
+test('a remote replaced by unrelated history is never merged in after the first sync', () => {
+  const r = rig();
+  const a = r.clone('a');
+  const sa = r.state('a');
+  assert.equal(syncStore(r.store(a), ctx(sa)).status, 'ok');
+  const other = join(r.root, 'other.git');
+  r.sh(r.root, 'init', '-q', '--bare', '-b', 'main', other);
+  const o = join(r.root, 'o');
+  r.sh(r.root, 'clone', '-q', other, o);
+  r.write(o, 'stranger.md', 'not ours\n');
+  r.sh(o, 'add', '-A'); r.sh(o, 'commit', '-q', '-m', 'unrelated'); r.sh(o, 'push', '-q', 'origin', 'HEAD:main');
+  r.sh(a, 'remote', 'set-url', 'origin', other);
+  const res = syncStore(r.store(a), ctx(sa));
+  assert.equal(res.status, 'stopped');
+  assert.match(res.detail, /no history in common/);
+  assert.ok(!existsSync(join(a, 'stranger.md')));
+});
