@@ -20,24 +20,48 @@ import { git } from './git.mjs';
 export const sha256 = (data) => createHash('sha256').update(data).digest('hex');
 export const WRITE_TTL_MS = 24 * 60 * 60 * 1000;
 
-export function readNewRuns(logPath, offset) {
+/**
+ * Runs appended to the log since byte `offset`, read in chunks so a log of
+ * hundreds of megabytes never sits in memory or in one string. With no offset
+ * yet, it returns none and the current size: the past is already settled. Only
+ * complete lines count. With `since`, runs that finished earlier are dropped,
+ * and each kept run carries only the fields the check needs.
+ */
+export function readNewRuns(logPath, offset, { chunkSize = 8 * 1024 * 1024, since = -Infinity } = {}) {
   let fd;
-  try { fd = openSync(logPath, 'r'); } catch { return { runs: [], offset: 0 }; }
+  try { fd = openSync(logPath, 'r'); } catch { return { runs: [], offset: offset ?? 0 }; }
   try {
     const size = fstatSync(fd).size;
     if (offset === undefined || offset === null) return { runs: [], offset: size };
-    let from = offset > size ? 0 : offset;
-    if (from === size) return { runs: [], offset: size };
-    const buf = Buffer.alloc(size - from);
-    readSync(fd, buf, 0, buf.length, from);
-    const end = buf.lastIndexOf(0x0a);
-    if (end < 0) return { runs: [], offset: from };
+    let pos = offset > size ? 0 : offset; // a shorter log was replaced: start over
+    let consumed = pos;
+    let carry = Buffer.alloc(0);
     const runs = [];
-    for (const line of buf.subarray(0, end).toString('utf8').split('\n')) {
-      if (!line.trim()) continue;
-      try { runs.push(JSON.parse(line)); } catch { /* a line Aside never finished; skip it */ }
+    const keep = (line) => {
+      if (!line.trim()) return;
+      let run;
+      try { run = JSON.parse(line); } catch { return; }
+      if (since > -Infinity && !(Date.parse(run.finishedAt) >= since)) return;
+      runs.push({
+        id: run.id, startedAt: run.startedAt, finishedAt: run.finishedAt,
+        changes: (run.changes ?? []).map((c) => ({ path: c.path, beforeSha256: c.beforeSha256, beforeContent: c.beforeContent })),
+      });
+    };
+    while (pos < size) {
+      const buf = Buffer.alloc(Math.min(chunkSize, size - pos));
+      const n = readSync(fd, buf, 0, buf.length, pos);
+      if (n <= 0) break;
+      pos += n;
+      const data = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n);
+      let start = 0;
+      for (let nl = data.indexOf(0x0a, start); nl >= 0; nl = data.indexOf(0x0a, start)) {
+        keep(data.subarray(start, nl).toString('utf8'));
+        consumed += nl - start + 1;
+        start = nl + 1;
+      }
+      carry = Buffer.from(data.subarray(start));
     }
-    return { runs, offset: from + end + 1 };
+    return { runs, offset: consumed };
   } finally {
     closeSync(fd);
   }
@@ -69,12 +93,14 @@ export function mergeLostUpdate({ workTree, path, base, theirs }) {
     writeFileSync(ours, readFileSync(file));
     writeFileSync(before, base);
     writeFileSync(sync, theirs);
+    const asideWrote = readFileSync(ours);
     const r = git(['merge-file', '-p', ours, before, sync], { cwd: tmp });
     if (r.code !== 0) return { clean: false };
     const out = join(dirname(file), `.${basename(file)}.agent-sync.tmp`);
     writeFileSync(out, r.stdout);
     renameSync(out, file);
-    return { clean: true };
+    // What it replaced and what it wrote, so this write is checked like a merge's.
+    return { clean: true, before: asideWrote, after: r.stdout };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

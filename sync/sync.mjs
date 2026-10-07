@@ -6,7 +6,8 @@
  *   node sync/sync.mjs                  one pass
  *   node sync/sync.mjs --resume <store> clear a stop after fixing its cause
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, unlinkSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { acquire, release } from '../bridge/lock.mjs';
 import { loadConfig } from './config.mjs';
@@ -46,6 +47,13 @@ export async function main(argv, {
     console.log(state.resume(name) ? `resumed ${name}` : `${name} was not stopped`);
     return 0;
   }
+  // The lock lives in this machine's own state folder, so a lock naming another
+  // host is ours from before the host name changed (macOS renames itself with
+  // the network). The bridge lock's cross-host caution does not apply here.
+  try {
+    const held = JSON.parse(readFileSync(state.lockPath, 'utf8'));
+    if (held.host && held.host !== hostname()) unlinkSync(state.lockPath);
+  } catch { /* no lock, or unreadable: acquire decides */ }
   const lock = await acquire({ path: state.lockPath });
   if (!lock.ok) {
     console.log(`a pass is already running (pid ${lock.holder.pid}); skipping`);

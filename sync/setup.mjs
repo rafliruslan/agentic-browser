@@ -135,6 +135,7 @@ export function prepareStore(store, { machine, state, log = console.log }) {
 
   if (!existsSync(store.workTree)) {
     mkdirSync(dirname(store.workTree), { recursive: true });
+    if (store.gitDir) mkdirSync(dirname(store.gitDir), { recursive: true });
     const args = ['clone', '-q', '-b', store.branch];
     if (store.gitDir) args.push('--separate-git-dir', store.gitDir);
     const r = git([...args, store.remote, store.workTree], { cwd: dirname(store.workTree) });

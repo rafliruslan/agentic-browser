@@ -33,9 +33,7 @@ test('reads only complete new lines, and resets when the log shrinks', () => {
   assert.deepEqual(r.runs.map((x) => x.id), ['c']);
 });
 
-test('a missing log is no runs', () => {
-  assert.deepEqual(readNewRuns(join(tmp(), 'none.jsonl'), 5), { runs: [], offset: 0 });
-});
+
 
 const T = Date.parse('2026-10-07T10:00:00Z');
 const write = { path: 'n.md', preSha: sha256('old\n'), postBlob: 'abc', writtenAt: T };
@@ -60,7 +58,10 @@ test('three-way merge keeps both sides, or reports a conflict', () => {
   const dir = tmp();
   const base = 'a\nb\nc\nd\ne\n';
   writeFileSync(join(dir, 'n.md'), 'a\nb\nc\nd\nE\n'); // Aside's write
-  assert.deepEqual(mergeLostUpdate({ workTree: dir, path: 'n.md', base, theirs: 'A\nb\nc\nd\ne\n' }), { clean: true });
+  const merged = mergeLostUpdate({ workTree: dir, path: 'n.md', base, theirs: 'A\nb\nc\nd\ne\n' });
+  assert.equal(merged.clean, true);
+  assert.equal(merged.before.toString(), 'a\nb\nc\nd\nE\n');
+  assert.equal(merged.after, 'A\nb\nc\nd\nE\n');
   assert.equal(readFileSync(join(dir, 'n.md'), 'utf8'), 'A\nb\nc\nd\nE\n');
 
   writeFileSync(join(dir, 'n.md'), 'a\nb\nX\nd\ne\n');
@@ -72,4 +73,20 @@ test('old writes are pruned', () => {
   const now = T + WRITE_TTL_MS + 1;
   assert.deepEqual(pruneWrites([write, { ...write, writtenAt: now - 10 }], now).length, 1);
   assert.deepEqual(pruneWrites(undefined, now), []);
+});
+
+test('a missing log keeps the offset, and reads go in chunks across line breaks', () => {
+  assert.deepEqual(readNewRuns(join(tmp(), 'none.jsonl'), 77), { runs: [], offset: 77 });
+  const log = join(tmp(), '.history.jsonl');
+  writeFileSync(log, ['a', 'b', 'c'].map((id) => run({ id, startedAt: 's', finishedAt: '2026-10-07T10:00:00Z', changes: [] })).join(''));
+  const r = readNewRuns(log, 0, { chunkSize: 7 });
+  assert.deepEqual(r.runs.map((x) => x.id), ['a', 'b', 'c']);
+  assert.equal(r.offset, readFileSync(log).length);
+});
+
+test('runs finished before the oldest write are not kept', () => {
+  const log = join(tmp(), '.history.jsonl');
+  writeFileSync(log, run({ id: 'old', finishedAt: '2026-10-01T00:00:00Z' }) + run({ id: 'new', finishedAt: '2026-10-07T10:00:00Z' }));
+  const r = readNewRuns(log, 0, { since: Date.parse('2026-10-07T00:00:00Z') });
+  assert.deepEqual(r.runs.map((x) => x.id), ['new']);
 });

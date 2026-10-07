@@ -228,3 +228,73 @@ test('a token in a file name is never committed', () => {
   assert.equal(res.status, 'stopped');
   assert.match(res.detail, /slack-token/);
 });
+
+test('a repo whose first push never happened pushes it on the next pass', () => {
+  const r = rig();
+  const remote = join(r.root, 'empty.git');
+  r.sh(r.root, 'init', '-q', '--bare', '-b', 'main', remote);
+  const w = join(r.root, 'w');
+  r.sh(r.root, 'init', '-q', '-b', 'main', w);
+  r.write(w, 'n.md', 'n\n');
+  r.sh(w, 'add', '-A'); r.sh(w, 'commit', '-q', '-m', 'first');
+  r.sh(w, 'remote', 'add', 'origin', remote);
+  assert.equal(syncStore(r.store(w, { remote }), ctx(r.state('w'))).status, 'ok');
+  assert.match(r.sh(r.root, 'ls-remote', '--heads', remote), /refs\/heads\/main/);
+});
+
+test('a repo whose first merge never happened merges unrelated history', () => {
+  const r = rig();
+  const w = join(r.root, 'w');
+  r.sh(r.root, 'init', '-q', '-b', 'main', w);
+  r.write(w, 'mine.md', 'mine\n');
+  r.sh(w, 'add', '-A'); r.sh(w, 'commit', '-q', '-m', 'local first');
+  r.sh(w, 'remote', 'add', 'origin', r.remote);
+  assert.equal(syncStore(r.store(w), ctx(r.state('w'))).status, 'ok');
+  assert.equal(r.read(w, 'notes/a.md'), 'one\ntwo\nthree\n');
+  assert.ok(existsSync(join(r.clone('c'), 'mine.md')));
+});
+
+test('a note written during the fetch retries next pass instead of stopping', () => {
+  const r = rig();
+  const a = r.clone('a'); const b = r.clone('b');
+  r.write(b, 'notes/a.md', 'ONE\ntwo\nthree\n');
+  syncStore(r.store(b), ctx(r.state('b')));
+  const sa = r.state('a');
+  const res = syncStore(r.store(a), ctx(sa, { beforeMerge: () => r.write(a, 'notes/a.md', 'one\ntwo\nTHREE\n') }));
+  assert.equal(res.status, 'retry');
+  assert.equal(sa.stopped('mem'), null);
+  assert.equal(r.read(a, 'notes/a.md'), 'one\ntwo\nTHREE\n', 'the new write is untouched');
+  assert.equal(syncStore(r.store(a), ctx(sa)).status, 'ok');
+  assert.equal(r.read(a, 'notes/a.md'), 'ONE\ntwo\nTHREE\n');
+});
+
+test("Aside overwriting the guard's own repair is repaired again", () => {
+  const base = 'a\nb\nc\nd\ne\n';
+  const r = rig({ seed: { 'n.md': base } });
+  const a = r.clone('a'); const b = r.clone('b');
+  writeFileSync(join(a, '.git', 'info', 'exclude'), '.history.jsonl\n');
+  const log = join(a, '.history.jsonl');
+  writeFileSync(log, '');
+  const sa = r.state('a');
+  let t = Date.parse('2026-10-07T10:00:00Z');
+  const now = () => t;
+  const st = r.store(a, { aside: true });
+  syncStore(st, ctx(sa, { now }));
+  r.write(b, 'n.md', 'A\nb\nc\nd\ne\n');
+  syncStore(r.store(b), ctx(r.state('b')));
+  t += 60_000; const merged = t;
+  syncStore(st, ctx(sa, { now }));
+  const undo = 'a\nb\nc\nd\nE\n';
+  r.write(a, 'n.md', undo);
+  appendFileSync(log, `${JSON.stringify({ startedAt: new Date(merged - 1000).toISOString(), finishedAt: new Date(merged + 1000).toISOString(), changes: [{ path: 'n.md', beforeSha256: sha256(base), beforeContent: base }] })}\n`);
+  t += 60_000; const repaired = t;
+  // Pass 3 repairs, then a second Aside run that read the undo saves over the repair.
+  const res = syncStore(st, ctx(sa, { now, beforePush: () => {
+    r.write(a, 'n.md', 'a\nb\nC\nd\nE\n');
+    appendFileSync(log, `${JSON.stringify({ startedAt: new Date(repaired - 1000).toISOString(), finishedAt: new Date(repaired + 1000).toISOString(), changes: [{ path: 'n.md', beforeSha256: sha256(undo), beforeContent: undo }] })}\n`);
+  } }));
+  assert.equal(res.status, 'ok');
+  t += 60_000;
+  assert.equal(syncStore(st, ctx(sa, { now })).status, 'ok');
+  assert.equal(r.read(a, 'n.md'), 'A\nb\nC\nd\nE\n');
+});

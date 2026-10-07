@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { storeGit, GitError } from './git.mjs';
 import { findSecrets, scanText } from './secrets.mjs';
 import {
-  readNewRuns, findLostUpdates, mergeLostUpdate, writesFromMerge, pruneWrites,
+  readNewRuns, findLostUpdates, mergeLostUpdate, writesFromMerge, pruneWrites, sha256,
 } from './aside-guard.mjs';
 
 const firstLine = (s) => String(s).trim().split('\n')[0].slice(0, 200);
@@ -38,7 +38,8 @@ export function syncStore(store, ctx) {
     mem.writes = pruneWrites(mem.writes, now());
 
     if (store.aside && store.mode === 'readwrite') {
-      const { runs, offset } = readNewRuns(join(store.workTree, '.history.jsonl'), mem.offset);
+      const oldest = mem.writes.length ? Math.min(...mem.writes.map((w) => w.writtenAt)) : Infinity;
+      const { runs, offset } = readNewRuns(join(store.workTree, '.history.jsonl'), mem.offset, { since: oldest });
       mem.offset = offset;
       for (const lost of findLostUpdates(runs, mem.writes)) {
         const theirs = ok(['cat-file', 'blob', lost.postBlob]);
@@ -47,6 +48,10 @@ export function syncStore(store, ctx) {
           state.saveStore(store.name, mem);
           return stop(`Aside and the sync both changed ${lost.path}; merge it by hand, ${RESUME(store.name)}`);
         }
+        // The repair is a write into Aside's folder too: an Aside run that read
+        // the note before it and saves after must be caught on the next pass.
+        const blob = ok(['hash-object', '-w', '--stdin'], { input: merged.after }).trim();
+        mem.writes.push({ path: lost.path, preSha: sha256(merged.before), postBlob: blob, writtenAt: now() });
       }
       state.saveStore(store.name, mem);
     }
@@ -66,12 +71,27 @@ export function syncStore(store, ctx) {
     const upstream = `origin/${store.branch}`;
     for (let attempt = 0; attempt < 2; attempt++) {
       const fetched = g(['fetch', '-q', 'origin', store.branch]);
-      if (fetched.code !== 0) return { status: 'offline', detail: firstLine(fetched.stderr) };
+      if (fetched.code !== 0) {
+        // The first push never happened (setup stopped after init): make it now.
+        if (store.mode === 'readwrite' && /couldn't find remote ref/i.test(fetched.stderr)) {
+          const first = g(['push', '-q', '-u', 'origin', `HEAD:${store.branch}`]);
+          return first.code === 0 ? { status: 'ok' } : { status: 'offline', detail: firstLine(first.stderr) };
+        }
+        return { status: 'offline', detail: firstLine(fetched.stderr) };
+      }
 
+      if (attempt === 0) ctx.beforeMerge?.();
       const before = ok(['rev-parse', 'HEAD']).trim();
+      // No common ancestor means the first merge never happened (setup stopped
+      // after init); allow it once, the way setup would have.
+      const unrelated = g(['merge-base', 'HEAD', upstream]).code !== 0 ? ['--allow-unrelated-histories'] : [];
       const merged = store.mode === 'pull'
         ? g(['merge', '--ff-only', '-q', upstream])
-        : g([...as, 'merge', '--no-edit', '-q', upstream]);
+        : g([...as, 'merge', '--no-edit', '-q', ...unrelated, upstream]);
+      if (merged.code !== 0 && /would be overwritten by merge|untracked working tree files would be/.test(merged.stderr)) {
+        // An agent wrote a note after this pass committed: nothing started, nothing lost.
+        return { status: 'retry', detail: 'a note changed during the pass; next pass picks it up' };
+      }
       if (merged.code !== 0) {
         const conflicted = g(['-c', 'core.quotepath=false', 'diff', '--name-only', '--diff-filter=U'])
           .stdout.split('\n').filter(Boolean);

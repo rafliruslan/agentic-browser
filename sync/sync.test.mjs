@@ -57,3 +57,15 @@ test('notification command per platform', () => {
   assert.deepEqual(notifyCommand('t', 'b', 'linux'), ['notify-send', ['t', 'b']]);
   assert.equal(notifyCommand('t', 'b', 'win32'), null);
 });
+
+test('a lock left by this machine under an older host name does not block passes', async () => {
+  const r = rig();
+  const a = r.clone('a');
+  const s = r.state('a');
+  const cfg = join(r.root, 'cfg.json');
+  writeFileSync(cfg, JSON.stringify({ machine: 'test', stores: [r.store(a)] }));
+  mkdirSync(s.dir, { recursive: true });
+  writeFileSync(s.lockPath, JSON.stringify({ pid: 999_999, host: 'old-network-name', since: new Date().toISOString() }));
+  assert.equal(await main([], { configPath: cfg, state: s, notify: () => {} }), 0);
+  assert.equal(s.status().stores.mem.result, 'ok');
+});

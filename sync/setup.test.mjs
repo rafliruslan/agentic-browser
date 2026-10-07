@@ -132,3 +132,11 @@ test('setup stops on a git error instead of pushing an empty first copy', () => 
     chmodSync(join(work, 'locked.md'), 0o644);
   }
 });
+
+test('cloning with a separate git dir creates its parent folder', () => {
+  const r = rig();
+  const target = join(r.root, 'fresh2');
+  const store = r.store(target, { gitDir: join(r.root, 'deep', 'nested', 'g.git') });
+  assert.equal(prepareStore(store, { machine: 'x', state: r.state('x'), log: () => {} }), 'cloned');
+  assert.ok(existsSync(join(target, 'notes/a.md')));
+});
