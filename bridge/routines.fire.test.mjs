@@ -132,3 +132,38 @@ test('the routine prompt no longer sends findings into site notes', async () => 
   assert.equal(/relevant memory\/sites\/ page/.test(prompt), false);
   assert.match(prompt, /read-only to a routine/);
 });
+
+// --- Slack, opt in per deployment ---------------------------------------------
+
+test('Slack stays refused to a routine unless the deployment names tools', async () => {
+  const cfg = await configWith({ aside: {}, slack: {} });
+  for (const env of [{}, { AGENT_ROUTINE_SLACK: '' }, { AGENT_ROUTINE_SLACK: 'nonsense' }]) {
+    const { allowed, denied } = await routineGrant(cfg, env);
+    assert.equal(allowed.some((t) => t.startsWith('mcp__slack')), false);
+    assert.ok(denied.includes('mcp__slack'));
+  }
+});
+
+test('an opted-in routine may read and post as the bot, and nothing else in Slack', async () => {
+  const cfg = await configWith({ aside: {}, slack: {} });
+  const { allowed, denied } = await routineGrant(cfg, { AGENT_ROUTINE_SLACK: 'post, thread,history' });
+  assert.deepEqual(allowed.filter((t) => t.startsWith('mcp__slack')), ['mcp__slack__post', 'mcp__slack__thread', 'mcp__slack__history']);
+  assert.equal(denied.includes('mcp__slack'), false, 'a server-wide denial would override the named tools');
+  for (const t of ['edit', 'delete', 'react', 'file', 'upload', 'channel_info', 'user_info']) {
+    assert.ok(denied.includes(`mcp__slack__${t}`), t);
+  }
+  assert.ok(denied.includes('Bash'), 'Bash is still refused');
+});
+
+test('edit and delete cannot be opted into', async () => {
+  const cfg = await configWith({ slack: {} });
+  const { allowed, denied } = await routineGrant(cfg, { AGENT_ROUTINE_SLACK: 'post,edit,delete,react,file' });
+  assert.deepEqual(allowed.filter((t) => t.startsWith('mcp__slack')), ['mcp__slack__post']);
+  for (const t of ['edit', 'delete', 'react', 'file']) assert.ok(denied.includes(`mcp__slack__${t}`), t);
+});
+
+test('opting in does nothing when the config has no Slack server', async () => {
+  const cfg = await configWith({ aside: {} });
+  const { allowed } = await routineGrant(cfg, { AGENT_ROUTINE_SLACK: 'post' });
+  assert.equal(allowed.some((t) => t.startsWith('mcp__slack')), false);
+});

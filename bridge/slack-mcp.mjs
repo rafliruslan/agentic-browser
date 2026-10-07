@@ -6,9 +6,9 @@
  * bot token from the same env file the bridge uses, and the agent only ever
  * sees tool names. See slack-tools.mjs for why.
  *
- * Bridge-only by design. Routines run unattended and notify-only, so routines.mjs
- * filters this server out of their allowlist rather than hand them a way to
- * post.
+ * Bridge-only by default. Routines run unattended, so routines.mjs filters this
+ * server out of their allowlist unless a deployment opts in by tool name with
+ * AGENT_ROUTINE_SLACK (reading and posting only, never edit or delete).
  */
 import { readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';

@@ -99,11 +99,36 @@ export const ROUTINE_DENIED = [
  */
 export const ROUTINE_PERMISSION_MODE = 'default';
 
+/**
+ * Every tool the Slack MCP server offers, and the few a deployment may opt a
+ * routine into with `AGENT_ROUTINE_SLACK=post,thread`. Off by default, so a
+ * machine that sets nothing behaves as before. Reading and posting only: a
+ * routine never gets edit, delete, react or file, since an unattended run
+ * should not be able to change or remove what people wrote.
+ */
+const SLACK_ALL = ['thread', 'history', 'channel_info', 'user_info', 'post', 'edit', 'delete', 'react', 'file', 'upload'];
+const SLACK_OPT_IN = ['thread', 'history', 'channel_info', 'user_info', 'post', 'upload'];
+
+export function slackOptIn(env = process.env) {
+  return String(env.AGENT_ROUTINE_SLACK || '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter((t) => SLACK_OPT_IN.includes(t));
+}
+
 /** What a routine may use, and what it is refused, for a given MCP config. */
-export async function routineGrant(mcpConfig) {
-  const allowed = (await allowedTools(mcpConfig, { base: ROUTINE_BASE }))
-    .filter((t) => !ROUTINE_DENIED.includes(t));
+export async function routineGrant(mcpConfig, env = process.env) {
+  const offered = await allowedTools(mcpConfig, { base: ROUTINE_BASE });
+  const optIn = offered.includes('mcp__slack') ? slackOptIn(env) : [];
+  const allowed = offered.filter((t) => !ROUTINE_DENIED.includes(t));
   const denied = [...(await deniedBrowserTools(mcpConfig)), ...ROUTINE_DENIED];
+  if (optIn.length) {
+    // Name each Slack tool instead of the server, and refuse the rest by name.
+    // The server-wide denial would override any single tool allowed under it.
+    allowed.push(...optIn.map((t) => `mcp__slack__${t}`));
+    denied.splice(denied.indexOf('mcp__slack'), 1);
+    denied.push(...SLACK_ALL.filter((t) => !optIn.includes(t)).map((t) => `mcp__slack__${t}`));
+  }
   return { allowed, denied };
 }
 
