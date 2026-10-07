@@ -17,9 +17,15 @@ by hand. No change is silently lost, and nothing private leaves private storage.
 
 Aside does not run on Linux. Omarchy gets a read-only copy of Aside's notes.
 
-Assumption: each agent answers Slack from one machine at a time. Two bridges on
-the same Slack app split the events between them, so one would miss messages.
-Memory is shared; the running agent is not.
+Assumption: each agent answers Slack from one machine at a time. Socket Mode
+delivers every mention to every connected bridge, so two copies of one agent
+would both answer each message (see `bridge/lock.mjs`). Memory is shared; the
+running agent is not.
+
+Layout requirement: on every machine `hammock-memory/` and `tara-workspace/`
+are siblings in one folder (on the Macs, `~/Documents/A1C/agent/`). Tara's links
+into Hammock's tree are relative, so they resolve on any machine with that
+layout.
 
 ## Stores
 
@@ -28,12 +34,14 @@ Every store is a private GitHub repo. The sync never touches a public repo.
 | Store | Repo | Tracked | Never tracked |
 |---|---|---|---|
 | Hammock | `hammock-memory` (exists) | `CLAUDE.md`, `skills/`, `scripts/`, `memory/` | `transcripts/` and what its `.gitignore` already excludes |
-| Tara | `tara-memory` (new) | `CLAUDE.md`, `memory/tara/` | `skills/` and `memory/shared/` (links, rebuilt per machine), `transcripts/`, `memory/repo-sync.md` (per machine) |
+| Tara | `tara-memory` (new) | `CLAUDE.md`, `memory/` (her notes, routines, and `shared/` with its links and `INDEX.md`), `skills/` (links and her own skills), the `.claude/skills` link | `transcripts/`, `memory/repo-sync.md` (per machine), anything else in `.claude/` |
 | Aside | `aside-memory-u0`, `aside-memory-u3` (new) | `**/*.md` | `.history.jsonl`, `.local-memory/`, `memory-index-local.json` |
 
 Tara's repo uses `tara-workspace/` as its work tree with an allowlist
 `.gitignore` (ignore everything, then un-ignore the tracked paths), so a new
-file in her workspace is private until someone decides otherwise.
+file in her workspace is private until someone decides otherwise. Her links are
+tracked as relative symlinks: which of Hammock's notes she may read is itself a
+decision worth syncing. Setup converts today's absolute links once.
 
 Each Aside account gets its own repo, because git cannot map a subfolder of
 one repo onto the root of a work tree. The git directory lives outside Aside's
@@ -156,9 +164,9 @@ Aside's index picks up file changes on its own (the daemon logs
    notes, the first run commits the local notes and merges the remote, so two
    Macs that learned separately combine on day one; conflicts stop the store as
    usual.
-3. Rebuilds Tara's links (`skills/`, `memory/shared/`) for this machine's paths.
-   Links are relative where the layout allows, absolute otherwise, and never
-   tracked.
+3. Converts any absolute link in Tara's workspace that points into the shared
+   parent folder to a relative one. Links pointing elsewhere are left alone and
+   listed.
 4. Installs and loads the timer: `~/Library/LaunchAgents/com.agent-sync.plist`
    (started under node, since launchd's bash is refused access to ~/Documents)
    or `~/.config/systemd/user/agent-sync.{service,timer}`.
