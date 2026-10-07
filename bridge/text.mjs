@@ -133,8 +133,14 @@ export function toSlackText(text) {
     return '```\n' + rows.join('\n') + '\n```\n';
   });
 
-  // Markdown links become Slack's <url|label> form.
-  out = out.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<$2|$1>');
+  // Markdown links become Slack's <url|label> form. The URL may hold balanced
+  // brackets (`.../Foo_(bar)`), which a plain "up to the first )" cut in half,
+  // and a `|`, `<` or `>` would end Slack's token early, so those are encoded.
+  out = out.replace(
+    /\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s]|\([^()\s]*\))+)\)/g,
+    (_match, label, url) =>
+      `<${url.replace(/\|/g, '%7C').replace(/</g, '%3C').replace(/>/g, '%3E')}|${label}>`,
+  );
 
   // Headings do not exist in Slack; a bold line is the closest thing.
   out = out.replace(/^\s{0,3}#{1,6}\s+(.+?)\s*$/gm, '*$1*');
@@ -153,6 +159,10 @@ export function toSlackText(text) {
   // Scoped to bold spans deliberately: rewriting every domain everywhere would
   // catch things like file names and version strings.
   out = out.replace(/\*([^*\n]+)\*/g, (match, inner) => {
+    // A full URL inside bold lost its asterisks to the link and, with its domain
+    // backticked below, came out as `https://`host`/path`, which is not a link
+    // at all. Drop the bold and leave the address whole.
+    if (/https?:\/\//i.test(inner) && !inner.includes('<')) return inner;
     if (!/\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/i.test(inner)) return match;
     if (inner.includes('`') || inner.includes('<')) return match;
     return inner.replace(/\b([a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})\b/gi, '`$1`');

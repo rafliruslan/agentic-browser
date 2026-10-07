@@ -178,3 +178,62 @@ test('buildBlocks keeps content from an unterminated fence', () => {
   assert.equal(els[0].type, 'rich_text_preformatted');
   assert.match(els[0].elements[0].text, /still useful/);
 });
+
+// --- bare URLs ----------------------------------------------------------------
+// Drive, Linear and Slack links carry underscores. The italic rule used to read
+// `_dEf-gH_` out of the middle of one and drop both underscores.
+
+test('parseInline keeps a bare URL with underscores whole, as a link', () => {
+  const url = 'https://docs.google.com/document/d/1AbC_dEf-gH_iJk/edit';
+  assert.deepEqual(parseInline(`Doc: ${url} for review`), [
+    { type: 'text', text: 'Doc: ' },
+    { type: 'link', url },
+    { type: 'text', text: ' for review' },
+  ]);
+});
+
+test('parseInline leaves sentence punctuation outside a bare URL', () => {
+  assert.deepEqual(parseInline('See https://example.com/a_b_c, then https://example.com/x?a=1&b=2.'), [
+    { type: 'text', text: 'See ' },
+    { type: 'link', url: 'https://example.com/a_b_c' },
+    { type: 'text', text: ', then ' },
+    { type: 'link', url: 'https://example.com/x?a=1&b=2' },
+    { type: 'text', text: '.' },
+  ]);
+});
+
+test('parseInline keeps a bracket that balances one inside the URL, and drops one that does not', () => {
+  assert.deepEqual(parseInline('https://en.wikipedia.org/wiki/Foo_(bar)'), [
+    { type: 'link', url: 'https://en.wikipedia.org/wiki/Foo_(bar)' },
+  ]);
+  assert.deepEqual(parseInline('(https://example.com/page)'), [
+    { type: 'text', text: '(' },
+    { type: 'link', url: 'https://example.com/page' },
+    { type: 'text', text: ')' },
+  ]);
+});
+
+test('parseInline turns a bare URL inside bold into a bold link', () => {
+  assert.deepEqual(parseInline('*https://example.com/a_b*'), [
+    { type: 'link', url: 'https://example.com/a_b', style: { bold: true } },
+  ]);
+});
+
+test('parseInline does not read a URL inside backticks as a link', () => {
+  assert.deepEqual(parseInline('`https://example.com/a_b`'), [
+    { type: 'text', text: 'https://example.com/a_b', style: { code: true } },
+  ]);
+});
+
+test('parseInline unescapes the url of an <url|label> token', () => {
+  assert.deepEqual(parseInline('<https://example.com/x?a=1&amp;b=2|the page>'), [
+    { type: 'link', url: 'https://example.com/x?a=1&b=2', text: 'the page' },
+  ]);
+});
+
+test('a URL on its own line, then a blank line and a sentence, survives as two sections', () => {
+  const url = 'https://linear.app/a1c/issue/OPS-324/some_title_here';
+  const out = sections(`${url}\n\nWorth a look, Douglas.`);
+  assert.equal(out.length, 2);
+  assert.deepEqual(out[0].elements, [{ type: 'link', url }]);
+});

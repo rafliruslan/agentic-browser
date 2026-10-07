@@ -15,8 +15,32 @@ const BULLET_LINE = /^\s*(?:•|[-*+])\s+(.*)$/;
 /** Ordered list lines: "1. thing". */
 const ORDERED_LINE = /^\s*\d+[.)]\s+(.*)$/;
 
-/** One pass over links, code spans, bold and italic. */
-const INLINE = /(<[^<>]+>)|(`[^`\n]+`)|(\*[^*\n]+\*)|(_[^_\n]+_)/g;
+/**
+ * One pass over links, code spans, bold, italic and bare URLs.
+ *
+ * The bare URL is its own alternative so it is read before the italic rule can
+ * see it. Without it `docs.google.com/document/d/1AbC_dEf_gH/edit` lost both
+ * underscores and italicised the middle of the ID, and Drive, Linear and Slack
+ * links are full of underscores.
+ */
+const INLINE = /(<[^<>]+>)|(`[^`\n]+`)|(\*[^*\n]+\*)|(_[^_\n]+_)|(https?:\/\/[^\s<>]+)/g;
+
+/**
+ * Split the trailing punctuation off a bare URL. A sentence's full stop, comma
+ * or closing bracket is not part of the address, but a `)` that balances a `(`
+ * inside it is (`.../Foo_(bar)`).
+ */
+function splitUrl(raw) {
+  let url = raw;
+  for (;;) {
+    const last = url.slice(-1);
+    const open = (url.match(/\(/g) || []).length;
+    const close = (url.match(/\)/g) || []).length;
+    if (/[.,;:!?'"*_\]}]/.test(last) || (last === ')' && close > open)) url = url.slice(0, -1);
+    else break;
+  }
+  return { url, rest: raw.slice(url.length) };
+}
 
 /**
  * rich_text carries literal characters, unlike mrkdwn which needs these
@@ -40,7 +64,9 @@ function angleToken(token) {
   if (/^#[C][A-Z0-9]+$/.test(head)) return { type: 'channel', channel_id: head.slice(1) };
   if (/^!/.test(head)) return { type: 'broadcast', range: head.slice(1) };
   if (/^https?:\/\//i.test(head) || /^mailto:/i.test(head)) {
-    return label ? { type: 'link', url: head, text: unescapeSlack(label) } : { type: 'link', url: head };
+    // A link's url is a literal field, so `&amp;` from mrkdwn becomes `&` again.
+    const url = unescapeSlack(head);
+    return label ? { type: 'link', url, text: unescapeSlack(label) } : { type: 'link', url };
   }
   return { type: 'text', text: unescapeSlack(token) };
 }
@@ -74,11 +100,27 @@ export function parseInline(line, style = {}) {
     else if (match[2]) out.push(textElement(token.slice(1, -1), { ...style, code: true }, true));
     else if (match[3]) out.push(...parseInline(token.slice(1, -1), { ...style, bold: true }));
     else if (match[4]) out.push(...parseInline(token.slice(1, -1), { ...style, italic: true }));
+    else if (match[5]) {
+      // A bare URL becomes a real link element: a plain text element is not
+      // clickable in rich_text. Whatever punctuation followed it stays text.
+      const { url, rest } = splitUrl(token);
+      out.push(Object.keys(style).length > 0 ? { type: 'link', url, style: { ...style } } : { type: 'link', url });
+      if (rest) out.push(textElement(rest, style));
+    }
     cursor = match.index + token.length;
   }
 
   if (cursor < source.length) out.push(textElement(source.slice(cursor), style));
-  return out.length > 0 ? out : [textElement('', style)];
+
+  // Punctuation split off a URL sits beside the text that follows it; join them.
+  const merged = [];
+  for (const el of out) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.type === 'text' && el.type === 'text' && JSON.stringify(prev.style) === JSON.stringify(el.style)) {
+      prev.text += el.text;
+    } else merged.push(el);
+  }
+  return merged.length > 0 ? merged : [textElement('', style)];
 }
 
 /**

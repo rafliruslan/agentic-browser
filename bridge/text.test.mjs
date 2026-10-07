@@ -335,3 +335,28 @@ test('stripAttribution handles empty input', () => {
   assert.equal(stripAttribution(''), '');
   assert.equal(stripAttribution(null), '');
 });
+
+// --- URLs ---------------------------------------------------------------------
+
+test('toSlackText keeps a URL whole when it was wrapped in bold', () => {
+  assert.equal(
+    toSlackText('Sheet *https://docs.google.com/spreadsheets/d/1vce22j/edit* here'),
+    'Sheet https://docs.google.com/spreadsheets/d/1vce22j/edit here',
+  );
+});
+
+test('toSlackText converts a Markdown link whose URL holds brackets', () => {
+  assert.equal(
+    toSlackText('[Wiki](https://en.wikipedia.org/wiki/Foo_(bar)) is long'),
+    '<https://en.wikipedia.org/wiki/Foo_(bar)|Wiki> is long',
+  );
+});
+
+test('toSlackText encodes a pipe in a Markdown link URL so the token is not cut short', () => {
+  assert.equal(toSlackText('[x](https://example.com/a|b)'), '<https://example.com/a%7Cb|x>');
+});
+
+test('toSlackText leaves a bare URL with underscores and a bold label beside it alone', () => {
+  const url = 'https://docs.google.com/document/d/1AbC_dEf-gH_iJk/edit';
+  assert.equal(toSlackText(`**Doc:** ${url}`), `*Doc:* ${url}`);
+});
