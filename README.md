@@ -281,10 +281,12 @@ Optionally give it a character: `cp examples/hammock/persona.md
 ~/.config/agentic-browser/persona.md` and edit. Without one it falls back to a plain
 assistant that still carries the honesty and autonomy rules.
 
-You need a Slack app with Socket Mode on, `app_mention` subscribed, and 11 bot
+You need a Slack app with Socket Mode on, `app_mention` subscribed, and 12 bot
 scopes: `app_mentions:read`, `chat:write`, `users:read`, `channels:read`,
-`groups:read`, `mpim:read`, `im:read`, and the four `*:history` ones, which
-`conversations.replies` needs so it can read a thread it was tagged into late.
+`groups:read`, `mpim:read`, `im:read`, the four `*:history` ones, which
+`conversations.replies` needs so it can read a thread it was tagged into late, and
+`files:read`, without which the `file` tool gets Slack's login page instead of an
+attachment.
 
 To let the agent follow a thread after it has replied, also subscribe to the
 `message.channels`, `message.groups`, `message.im` and `message.mpim` bot
