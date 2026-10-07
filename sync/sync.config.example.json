@@ -1,0 +1,11 @@
+{
+  "_linux": "On a machine without Aside, give the aside stores mode pull, no aside flag, and a workTree under ~/.local/share/agent-sync/.",
+  "machine": "mac-a",
+  "intervalMinutes": 5,
+  "stores": [
+    { "name": "hammock", "workTree": "~/Documents/A1C/agent/hammock-memory", "remote": "git@github.com:<you>/hammock-memory.git" },
+    { "name": "tara", "workTree": "~/Documents/A1C/agent/tara-workspace", "remote": "git@github.com:<you>/tara-memory.git", "relativeLinks": true },
+    { "name": "aside-u0", "workTree": "~/.aside/u/0/memory", "gitDir": "~/.local/share/agent-sync/aside-u0.git", "remote": "git@github.com:<you>/aside-memory-u0.git", "aside": true },
+    { "name": "aside-u3", "workTree": "~/.aside/u/3/memory", "gitDir": "~/.local/share/agent-sync/aside-u3.git", "remote": "git@github.com:<you>/aside-memory-u3.git", "aside": true }
+  ]
+}

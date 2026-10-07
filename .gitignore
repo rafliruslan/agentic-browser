@@ -16,3 +16,6 @@ repl/node_modules/
 # Account-specific relay config. linear-relay/wrangler.example.toml shows the shape.
 /linear-relay/wrangler.toml
 /linear-relay/.wrangler/
+
+# Per-machine memory sync config. sync/sync.config.example.json shows the shape.
+/sync/sync.config.json
