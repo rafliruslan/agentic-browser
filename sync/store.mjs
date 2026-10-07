@@ -6,7 +6,7 @@
  */
 import { join } from 'node:path';
 import { storeGit, GitError } from './git.mjs';
-import { findSecrets } from './secrets.mjs';
+import { findSecrets, scanText } from './secrets.mjs';
 import {
   readNewRuns, findLostUpdates, mergeLostUpdate, writesFromMerge, pruneWrites,
 } from './aside-guard.mjs';
@@ -97,6 +97,7 @@ export function syncStore(store, ctx) {
       const leaving = [
         ...findSecrets(ok([...q, 'log', '-p', '--text', '-U0', '--no-color', '--format=', `${upstream}..HEAD`])),
         ...findSecrets(ok([...q, 'diff', '--text', '-U0', '--no-color', upstream, 'HEAD'])),
+        ...scanText(ok(['log', '--format=%B', `${upstream}..HEAD`])).map((pattern) => ({ file: 'a commit message', pattern })),
       ];
       if (leaving.length) {
         const list = [...new Set(leaving.map((h) => `${h.file} (${h.pattern})`))].join(', ');

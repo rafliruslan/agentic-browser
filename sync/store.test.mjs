@@ -207,3 +207,24 @@ test('a token added while resolving a merge by hand is never pushed', () => {
   assert.match(res.detail, /gitlab-token/);
   assert.ok(!r.read(r.clone('c'), 'notes/a.md').includes('glpat-'));
 });
+
+test('a token in an unpushed commit message is never pushed', () => {
+  const r = rig();
+  const a = r.clone('a');
+  r.write(a, 'notes/m.md', 'm\n');
+  r.sh(a, 'add', '-A');
+  r.sh(a, 'commit', '-q', '-m', `use key ${'sk-ant-' + 'a'.repeat(30)}`);
+  const res = syncStore(r.store(a), ctx(r.state('a')));
+  assert.equal(res.status, 'stopped');
+  assert.match(res.detail, /a commit message \(anthropic-key\)/);
+  assert.ok(!existsSync(join(r.clone('c'), 'notes/m.md')));
+});
+
+test('a token in a file name is never committed', () => {
+  const r = rig();
+  const a = r.clone('a');
+  r.write(a, `notes/${'xoxb-' + '1'.repeat(30)}.md`, 'x\n');
+  const res = syncStore(r.store(a), ctx(r.state('a')));
+  assert.equal(res.status, 'stopped');
+  assert.match(res.detail, /slack-token/);
+});

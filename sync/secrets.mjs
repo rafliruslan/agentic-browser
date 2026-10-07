@@ -49,5 +49,10 @@ export function findSecrets(diff) {
   for (const [file, text] of addedLines(diff)) {
     for (const pattern of scanText(text)) hits.push({ file, pattern });
   }
+  // File names travel too, and a new empty file has no added lines at all.
+  for (const line of diff.split('\n')) {
+    if (!line.startsWith('diff --git ')) continue;
+    for (const pattern of scanText(line)) hits.push({ file: 'a file name', pattern });
+  }
   return hits;
 }
