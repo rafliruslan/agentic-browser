@@ -380,6 +380,17 @@ where a timer missed while the machine was asleep fires on wake. On macOS a
 close enough for a memory pass and worth knowing for anything that must not be
 skipped.
 
+An agent that edits its persona or the bridge needs its own bridge restarted,
+and cannot do it in the run that asks: the run is a child of the bridge and is
+cut off before it replies. `node bridge/restart-self.mjs` schedules a one-shot
+job outside the bridge that waits 40 s, then for no run in flight, restarts the
+service once and logs old and new pid to `restart-self.log` in the state
+directory. It finds the service from `XPC_SERVICE_NAME` (launchd) or the cgroup
+(systemd); `--service <label>` names another bridge. It exists because the
+improvised version, `launchctl submit` with `sleep; kickstart`, loops: a
+submitted job is KeepAlive, so it restarted the bridge every 30 seconds for
+hours, twice.
+
 `/browser-setup` also documents running Brave on macOS, for anyone who wants that
 instead of Aside. The Chromium 136+ refusal to open a debug port at the default
 profile path applies on both platforms.
