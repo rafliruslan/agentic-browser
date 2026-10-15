@@ -235,5 +235,21 @@ test('a URL on its own line, then a blank line and a sentence, survives as two s
   const url = 'https://linear.app/a1c/issue/OPS-324/some_title_here';
   const out = sections(`${url}\n\nWorth a look, Douglas.`);
   assert.equal(out.length, 2);
-  assert.deepEqual(out[0].elements, [{ type: 'link', url }]);
+  assert.deepEqual(out[0].elements, [{ type: 'link', url }, { type: 'text', text: '\n\n' }]);
+});
+
+// Slack renders adjacent sections on one line: "4 still blocked.Still blocked".
+// The paragraph break has to be text at the end of the earlier section.
+test('buildBlocks keeps the blank line between two paragraphs', () => {
+  const out = sections('Nothing moved. 4 still blocked.\n\n*Still blocked*\n- a\n- b\n\nHalal: no change.\n\nSheet not read.');
+  assert.deepEqual(
+    out.map((e) => e.type),
+    ['rich_text_section', 'rich_text_section', 'rich_text_list', 'rich_text_section', 'rich_text_section'],
+  );
+  assert.deepEqual(out[0].elements.at(-1), { type: 'text', text: '\n\n' });
+  // Before a list there is no section to run into, so nothing is added.
+  assert.notDeepEqual(out[1].elements.at(-1), { type: 'text', text: '\n\n' });
+  assert.deepEqual(out[3].elements.at(-1), { type: 'text', text: '\n\n' });
+  // The last paragraph has nothing after it.
+  assert.notDeepEqual(out[4].elements.at(-1), { type: 'text', text: '\n\n' });
 });

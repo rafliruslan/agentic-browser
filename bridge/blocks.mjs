@@ -144,6 +144,11 @@ export function buildBlocks(text) {
       inline.push(...parseInline(line));
       if (i < paragraph.length - 1) inline.push({ type: 'text', text: '\n' });
     });
+    // Slack runs adjacent sections together on one line ("blocked.Still blocked"),
+    // so the blank line that separated two paragraphs has to travel as text.
+    // Lists and fences are blocks of their own and need no help.
+    const prev = elements[elements.length - 1];
+    if (prev && prev.type === 'rich_text_section') prev.elements.push({ type: 'text', text: '\n\n' });
     elements.push({ type: 'rich_text_section', elements: inline });
     paragraph = [];
   };
