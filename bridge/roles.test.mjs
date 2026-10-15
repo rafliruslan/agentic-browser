@@ -27,6 +27,23 @@ test('a teammate is admitted only in a listed channel', () => {
   assert.deepEqual(roles.counts, { users: 2, channels: 1 });
 });
 
+test('* admits teammates in any channel, except !ID ones and DMs', () => {
+  const roles = createRoles({ operator: OP, teamUsers: 'U_A', teamChannels: '*,!C_PRIVATE' });
+  assert.equal(roles.roleOf('U_A', 'C_NEW'), TEAM);
+  assert.equal(roles.roleOf('U_A', 'G_OLD'), TEAM);
+  assert.equal(roles.roleOf('U_A', 'C_PRIVATE'), null);
+  assert.equal(roles.roleOf('U_A', 'D_DM'), null);
+  assert.equal(roles.roleOf('U_X', 'C_NEW'), null);
+  assert.equal(roles.roleOf(OP, 'C_PRIVATE'), OPERATOR);
+  assert.equal(roles.teamEnabled, true);
+});
+
+test('only !ID entries admit nobody (fail closed)', () => {
+  const roles = createRoles({ operator: OP, teamUsers: 'U_A', teamChannels: '!C1' });
+  assert.equal(roles.roleOf('U_A', 'C2'), null);
+  assert.equal(roles.teamEnabled, false);
+});
+
 test('teammates with no channels listed are served nowhere (fail closed)', () => {
   const roles = createRoles({ operator: OP, teamUsers: 'U_A', teamChannels: '' });
   assert.equal(roles.roleOf('U_A', 'C_OPS'), null);

@@ -49,7 +49,14 @@ export function parseList(value) {
 
 export function createRoles({ operator, teamUsers = '', teamChannels = '' } = {}) {
   const users = new Set(parseList(teamUsers));
-  const channels = new Set(parseList(teamChannels));
+  const listed = parseList(teamChannels);
+  const channels = new Set(listed.filter((c) => !c.startsWith('!')));
+  const except = new Set(listed.filter((c) => c.startsWith('!')).map((c) => c.slice(1)));
+  // `*` admits teammates in every channel the bot has been added to (Slack sends
+  // events only from those), bar the `!ID` ones. A DM is never a team channel.
+  const anywhere = channels.has('*');
+  const inChannel = (channel) =>
+    !except.has(channel) && (anywhere ? !String(channel ?? '').startsWith('D') : channels.has(channel));
   // The operator is never also a teammate, so a typo cannot demote them.
   users.delete(operator);
 
@@ -61,7 +68,7 @@ export function createRoles({ operator, teamUsers = '', teamChannels = '' } = {}
     roleOf(userId, channel) {
       if (!userId) return null;
       if (userId === operator) return OPERATOR;
-      if (users.has(userId) && channels.has(channel)) return TEAM;
+      if (users.has(userId) && inChannel(channel)) return TEAM;
       return null;
     },
     get teamEnabled() {
