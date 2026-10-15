@@ -24,9 +24,10 @@
  *      candidate either (no unread badge).
  *
  *   4. NO ROLE ESCALATION. A chat's role comes from the config, never from what
- *      the message says. A sender label in a group is trusted only when it is
- *      a saved name or a number (WhatsApp shows `~pushname` for strangers, and
- *      that is not trusted).
+ *      the message says. A sender label is trusted only when the page proves it:
+ *      a saved contact's name, a number that is the sender's own, or an id
+ *      pinned in the config. The label alone proves nothing: in a group the
+ *      page shows some members by the name they chose, with no `~`.
  *
  * Messages are read from the page (`data-pre-plain-text` carries the sender
  * and time). Chat-list previews are used only to notice that something changed.
@@ -52,6 +53,8 @@ export const TEAM = 'team';
  * account's own id). A name inside a sentence, even "Tara,", is people talking.
  * A group may add an explicit `trigger` regex; none is set by default.
  */
+const PERSON_ID = /^([^@\s]+)@(c\.us|lid)$/;
+
 export function parseConfig(raw = {}) {
   const people = new Map();
   for (const [label, p] of Object.entries(raw.people ?? {})) {
@@ -60,6 +63,9 @@ export function parseConfig(raw = {}) {
       label,
       name: String(p?.name || label),
       role: p?.role === OPERATOR ? OPERATOR : TEAM,
+      // Their WhatsApp ids ("<n>@c.us", "<n>@lid"), for someone the page cannot
+      // prove by a saved name or number. Anything else is dropped.
+      ids: new Set((Array.isArray(p?.ids) ? p.ids : []).map(String).filter((x) => PERSON_ID.test(x))),
     });
   }
   const groups = new Map();
@@ -138,8 +144,10 @@ export function parsePre(pre) {
 }
 
 /**
- * Raw `{pre, text, id, mentionsSelf}` from the page -> `{sender, at, text, id,
- * mentionsSelf}`, empties dropped.
+ * Raw `{pre, text, id, mentionsSelf, author, saved, pn}` from the page ->
+ * `{sender, at, text, id, mentionsSelf, author, saved, pn}`, empties dropped.
+ * `author` is the sender's id, `saved` the account's own name for them (empty
+ * when they are not a saved contact), `pn` their number's digits when known.
  */
 export function parseMessages(raw) {
   return (raw ?? [])
@@ -148,6 +156,9 @@ export function parseMessages(raw) {
       text: String(m.text ?? '').trim(),
       id: String(m.id ?? ''),
       mentionsSelf: m.mentionsSelf === true,
+      author: String(m.author ?? ''),
+      saved: String(m.saved ?? ''),
+      pn: digits(m.pn),
     }))
     .filter((m) => m.text);
 }
@@ -164,49 +175,76 @@ const looksLikeNumber = (s) => /^\+?[\d\s()-]{7,}$/.test(String(s ?? ''));
 const digits = (s) => String(s ?? '').replace(/\D/g, '');
 
 /**
+ * Did the person the label names really send this? The label is what the page
+ * prints, and in a group that can be a name the sender chose for themselves,
+ * shown without a `~`. So the label counts only when the page backs it: it is
+ * the account's saved name for the sender, or a number that is the sender's
+ * own, or the sender's id is pinned for that person in the config.
+ */
+export function provenSender(m, person) {
+  const label = String(m?.sender ?? '');
+  if (!label || label.startsWith('~')) return false;
+  if (m.saved && m.saved === label) return true;
+  if (looksLikeNumber(label) && m.pn && m.pn === digits(label)) return true;
+  return !!(m.author && person?.ids?.has(m.author));
+}
+
+/**
  * Is this chat really the DM it is named after? Anyone in a group can rename it
  * "Dana Hart", or to the operator's number, and the title and the senders
  * alone cannot tell: a group where one other person has written looks like a
  * DM. So the chat's own id decides. WhatsApp keeps it on the open chat (read by
  * `readJs`): `<number>@c.us` or `<id>@lid` for a person, `@g.us` for a group.
  * No id, or any other kind, is refused. A title that is a number needs a
- * `<number>@c.us` id with that same number; `@lid` only serves a saved name. On top of that, a DM has at most one other sender, and a
- * saved name must match the title; a `~pushname` label never does.
+ * `<number>@c.us` id with that same number, or an id pinned for that person;
+ * `@lid` only serves a saved name. On top of that, a DM has at most one other
+ * sender, and under a name title every message from them must be proved by
+ * `provenSender`: a stranger can choose a display name, not the account's
+ * saved name for them.
  */
-export function isGenuineDm(messages, title, selfName, chatId) {
-  const id = /^([^@\s]+)@(c\.us|lid)$/.exec(String(chatId ?? ''));
+export function isGenuineDm(messages, title, selfName, chatId, person = null) {
+  const id = PERSON_ID.exec(String(chatId ?? ''));
   if (!id) return false;
+  const pinned = !!person?.ids?.has(id[0]);
   const numeric = looksLikeNumber(title);
   // A number title is only proved by that number's own chat. An @lid id hides
   // the number, and a hidden-number sender can show a display name made to
   // look like one, so @lid never stands in for a number.
-  if (numeric && (id[2] !== 'c.us' || digits(id[1]) !== digits(title))) return false;
-  const others = new Set(messages.map((m) => m.sender).filter((s) => s && s !== selfName));
+  if (numeric && !pinned && (id[2] !== 'c.us' || digits(id[1]) !== digits(title))) return false;
+  const theirs = messages.filter((m) => m.sender && m.sender !== selfName);
+  const others = new Set(theirs.map((m) => m.sender));
   if (others.size > 1) return false;
   if ([...others].some((s) => s.startsWith('~'))) return false;
-  if (others.size === 1 && !numeric) return others.has(title);
-  return true;
+  if (numeric || pinned) return true;
+  return theirs.every((m) => m.sender === title && provenSender(m, person));
 }
+
+/** A group message aimed at the account: it tags it, or matches the group's trigger. */
+const aimed = (m, group) => m.mentionsSelf || !!(group.trigger && group.trigger.test(m.text));
 
 /**
  * The messages that count as a request, and who made it.
- * DM: the whole tail, from the contact. Group: only an allowlisted sender whose
- * message tags the account (or matches the group's own trigger, if it has one);
- * a `~pushname` label is never an allowlisted one.
+ * DM: the whole tail, from the contact. Group: only an allowlisted sender,
+ * proved by `provenSender`, whose message tags the account (or matches the
+ * group's own trigger, if it has one).
  */
 export function qualifying({ tail, kind, person, group, config }) {
   if (kind === 'dm') return tail.length ? { person, msgs: tail } : null;
   const hits = tail
-    .filter(
-      (m) =>
-        !m.sender.startsWith('~') &&
-        config.people.has(m.sender) &&
-        (m.mentionsSelf || (group.trigger && group.trigger.test(m.text))),
-    )
+    .filter((m) => config.people.has(m.sender) && provenSender(m, config.people.get(m.sender)) && aimed(m, group))
     .map((m) => ({ m, person: config.people.get(m.sender) }));
   if (!hits.length) return null;
   const last = hits[hits.length - 1].person;
   return { person: last, msgs: hits.filter((h) => h.person === last).map((h) => h.m) };
+}
+
+/**
+ * Group messages aimed at the account under an allowlisted label that the page
+ * could not prove: a teammate who is not a saved contact, or someone using
+ * their name. Reported so the operator can save the contact or pin the id.
+ */
+export function unprovenAsks({ tail, group, config }) {
+  return tail.filter((m) => config.people.has(m.sender) && aimed(m, group) && !provenSender(m, config.people.get(m.sender)));
 }
 
 export function isFresh(msg, now, maxAgeMs) {
@@ -312,6 +350,46 @@ export function buildPrompt({ who, kind, title, request, context }) {
 
 const SENTINEL = '@@WA@@';
 
+// WhatsApp's own data, from the React props on the page. Each is the source of
+// a function that runs inside page.evaluate, so it cannot use anything outside.
+const WID = `(w) => !w ? '' : String(w._serialized || (w.user && w.server ? w.user + '@' + w.server : ''))`;
+
+/**
+ * The open chat's id: "<n>@c.us" or "<n>@lid" for a person, "<n>@g.us" for a
+ * group. '' when it cannot be found, which callers treat as "not proved".
+ */
+const CHAT_ID_FN = `() => {
+  const wid = ${WID};
+  const el = document.querySelector('#main');
+  const key = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+  let f = key ? el[key] : null;
+  for (let i = 0; f && i < 60; i++, f = f.return) {
+    const id = f.memoizedProps?.chat?.id;
+    if (id) return wid(id);
+  }
+  return '';
+}`;
+
+/**
+ * Who sent one message, by WhatsApp's record rather than the printed label:
+ * the sender's id, the account's saved name for them ('' when not saved), and
+ * their number when WhatsApp knows it.
+ */
+const SENDER_FN = `(el) => {
+  const wid = ${WID};
+  const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+  let f = key ? el[key] : null;
+  for (let i = 0; f && i < 40; i++, f = f.return) {
+    const msg = f.memoizedProps?.msg;
+    if (!msg || !msg.id) continue;
+    const author = wid(msg.author) || (msg.id.fromMe ? '' : wid(msg.from));
+    const so = msg.senderObj || {};
+    const pn = wid(so.phoneNumber) || author;
+    return { author, saved: typeof so.name === 'string' ? so.name : '', pn: pn.endsWith('@c.us') ? pn.split('@')[0] : '' };
+  }
+  return { author: '', saved: '', pn: '' };
+}`;
+
 /** Opens WhatsApp Web and sets `state` to ok, busy, qr or timeout. */
 const OPEN_JS = `
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -366,30 +444,18 @@ if (state !== 'ok') { out({ state }); } else {
       await sleep(1000);
       // Only the elements that open with a [time, date] stamp are messages. A
       // list line inside a message is nested in it and carries a bare "- ".
-      messages = await page.evaluate((own) => [...document.querySelectorAll('#main [data-pre-plain-text^="["]')].slice(-30).map((m) => {
+      messages = await page.evaluate((own) => { const sender = ${SENDER_FN}; return [...document.querySelectorAll('#main [data-pre-plain-text^="["]')].slice(-30).map((m) => {
         const chips = [...m.querySelectorAll('[data-app-text-template]')];
         const mentionsSelf = chips.some((c) => {
           const id = ((c.getAttribute('data-app-text-template') || '').replace(/[\\u200b-\\u200f\\u2060\\ufeff]/g, '').match(/^(\\d+)/) || [])[1];
           return id && own.includes(id);
         }) || [...m.querySelectorAll('[data-plain-text]')].some((c) => /^@(you|a1c\\/0spike official)$/i.test((c.getAttribute('data-plain-text') || '').trim()));
-        return { pre: m.getAttribute('data-pre-plain-text'), text: (m.innerText || '').trim(), id: m.closest('[data-id]')?.getAttribute('data-id') || '', mentionsSelf };
-      }), own);
+        return { pre: m.getAttribute('data-pre-plain-text'), text: (m.innerText || '').trim(), id: m.closest('[data-id]')?.getAttribute('data-id') || '', mentionsSelf, ...sender(m) };
+      }); }, own);
       if (messages.length) break;
     }
     const header = ((await page.locator('#main header').first().innerText()) || '').split('\\n')[0].trim();
-    // The open chat's id, from the props WhatsApp's React tree gives #main:
-    // "<n>@c.us" or "<n>@lid" for a person, "<n>@g.us" for a group. '' when it
-    // cannot be found, which the caller treats as "not a DM".
-    const chatId = await page.evaluate(() => {
-      const el = document.querySelector('#main');
-      const key = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
-      let f = key ? el[key] : null;
-      for (let i = 0; f && i < 60; i++, f = f.return) {
-        const id = f.memoizedProps?.chat?.id;
-        if (id) return String(id._serialized || (id.user && id.server ? id.user + '@' + id.server : ''));
-      }
-      return '';
-    });
+    const chatId = await page.evaluate(${CHAT_ID_FN});
     out({ state: 'ok', header, chatId, messages });
   }
 }`;
@@ -469,11 +535,16 @@ if (state !== 'ok') { out({ state }); } else {
 }`;
 
 /**
- * Send chunks into one chat. Header is checked in the same call that clicks
- * Send, the box is read back before sending, and the bubble is read after.
+ * Send chunks into one chat. The chat is found by title, so it must also be
+ * the chat that was read: its id is checked against `chatId` before the first
+ * chunk and again, with the header, before each one. Anyone can rename a group
+ * to a teammate's name, and a group with new messages jumps up the list. The
+ * box is read back before sending, and the bubble is read after.
  */
-export const sendJs = (title, chunks, selfName, { dry = false } = {}) => `${OPEN_JS}
+export const sendJs = (title, chunks, selfName, { dry = false, chatId = '' } = {}) => `${OPEN_JS}
 const TITLE = ${JSON.stringify(title)};
+const CHAT_ID = ${JSON.stringify(chatId)};
+const chatId = () => page.evaluate(${CHAT_ID_FN});
 const CHUNKS = ${JSON.stringify(chunks)};
 const SELF = ${JSON.stringify(selfName)};
 const DRY = ${dry ? 'true' : 'false'};
@@ -484,14 +555,15 @@ if (state !== 'ok') { out({ state }); } else {
     await page.locator('#pane-side [role="row"]').nth(idx).click();
     await sleep(2000);
     const header = ((await page.locator('#main header').first().innerText()) || '').split('\\n')[0].trim();
-    if (header !== TITLE) { out({ state: 'wrongchat', header }); } else {
+    const opened = await chatId();
+    if (header !== TITLE || !CHAT_ID || opened !== CHAT_ID) { out({ state: 'wrongchat', header, kind: opened.split('@')[1] || 'unknown' }); } else {
       const box = page.locator('#main footer [contenteditable="true"]').first();
       let sent = 0;
       let problem = '';
       try {
         for (const chunk of CHUNKS) {
           const again = ((await page.locator('#main header').first().innerText()) || '').split('\\n')[0].trim();
-          if (again !== TITLE) { problem = 'chat changed'; break; }
+          if (again !== TITLE || (await chatId()) !== CHAT_ID) { problem = 'chat changed'; break; }
           const norm = (s) => s.replace(/\\s+/g, ' ').trim();
           // insertText straight after a clear is sometimes dropped, so pause
           // after each step, read the box back, and retry the whole line up.
@@ -768,8 +840,13 @@ async function handle({ c, config, state, env }) {
     return done();
   }
   const messages = parseMessages(read.messages);
+  // The reply goes to the chat with this id and no other. No id, no reply.
+  if (!read.chatId) {
+    log(`read "${title}": the chat id could not be read, skipping`);
+    return done();
+  }
 
-  if (c.kind === 'dm' && !isGenuineDm(messages, title, config.selfName, read.chatId)) {
+  if (c.kind === 'dm' && !isGenuineDm(messages, title, config.selfName, read.chatId, c.person)) {
     const kind = String(read.chatId || '').split('@')[1] || 'unknown';
     log(`"${title}" is not a confirmed one-to-one chat (chat kind ${kind}); ignoring`);
     await notifyOperator(config, env, `WhatsApp: a chat titled "${title}" could not be confirmed as the DM it is named after (chat kind ${kind}). Ignored.`);
@@ -787,6 +864,13 @@ async function handle({ c, config, state, env }) {
     return done();
   }
   const q = qualifying({ tail, kind: c.kind, person: c.person, group: c.group, config });
+  if (c.kind === 'group') {
+    for (const m of unprovenAsks({ tail, group: c.group, config })) {
+      const why = m.author ? `sender id ${m.author}` : 'no sender id on the page';
+      log(`"${title}": "${m.sender}" asked, but is not a saved contact or a pinned id (${why}); ignored`);
+      await notifyOperator(config, env, `WhatsApp: in "${title}", someone shown as "${m.sender}" tagged the account, but the page could not prove it is them (${why}). Ignored. If it is them, save the contact on the phone or add the id to their "ids" in whatsapp.json.`);
+    }
+  }
   if (!q) {
     log(`"${title}": no qualifying request in ${tail.length} new message(s)`);
     return done({ handled: hash });
@@ -843,7 +927,7 @@ async function handle({ c, config, state, env }) {
   }
   const chunks = toWhatsApp(reply);
   let sent = { state: 'skipped' };
-  if (chunks.length) sent = await runRepl(config.account, sendJs(title, chunks, config.selfName));
+  if (chunks.length) sent = await runRepl(config.account, sendJs(title, chunks, config.selfName, { chatId: read.chatId }));
 
   const sentOk = sent.state === 'ok' && sent.sent === sent.of && !sent.problem;
   done({ handled: hash });
