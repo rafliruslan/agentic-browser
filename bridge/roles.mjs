@@ -53,10 +53,16 @@ export function createRoles({ operator, teamUsers = '', teamChannels = '' } = {}
   const channels = new Set(listed.filter((c) => !c.startsWith('!')));
   const except = new Set(listed.filter((c) => c.startsWith('!')).map((c) => c.slice(1)));
   // `*` admits teammates in every channel the bot has been added to (Slack sends
-  // events only from those), bar the `!ID` ones. A DM is never a team channel.
+  // events only from those), bar the `!ID` ones. A DM or a group DM is never a
+  // team channel: under `*` the conversation must be known to be a channel
+  // ('channel' or 'group', see channelKind), and an unknown kind is refused. A
+  // group DM's id does not start with D, so the id alone cannot tell.
   const anywhere = channels.has('*');
-  const inChannel = (channel) =>
-    !except.has(channel) && (anywhere ? !String(channel ?? '').startsWith('D') : channels.has(channel));
+  const inChannel = (channel, kind) => {
+    if (!channel || except.has(channel)) return false;
+    if (channels.has(channel)) return true;
+    return anywhere && (kind === 'channel' || kind === 'group');
+  };
   // The operator is never also a teammate, so a typo cannot demote them.
   users.delete(operator);
 
@@ -65,11 +71,19 @@ export function createRoles({ operator, teamUsers = '', teamChannels = '' } = {}
      * The role of a sender in a channel, or null when they may not drive the agent.
      * The operator is admitted wherever the channel gate already lets them in.
      */
-    roleOf(userId, channel) {
+    roleOf(userId, channel, kind) {
       if (!userId) return null;
       if (userId === operator) return OPERATOR;
-      if (users.has(userId) && inChannel(channel)) return TEAM;
+      if (users.has(userId) && inChannel(channel, kind)) return TEAM;
       return null;
+    },
+    /**
+     * Whether roleOf needs the conversation's kind for this sender here: a
+     * teammate, under `*`, in a channel not listed by id. Only then is it worth
+     * asking Slack, since every message in every channel passes through.
+     */
+    needsKind(userId, channel) {
+      return anywhere && !!channel && users.has(userId) && !channels.has(channel) && !except.has(channel);
     },
     get teamEnabled() {
       return users.size > 0 && channels.size > 0;
@@ -78,6 +92,19 @@ export function createRoles({ operator, teamUsers = '', teamChannels = '' } = {}
       return { users: users.size, channels: channels.size };
     },
   };
+}
+
+/**
+ * A conversation's kind, in the words of a message event's channel_type, from
+ * what conversations.info returns: 'im', 'mpim', 'group' (private) or 'channel'.
+ * app_mention events carry no channel_type, so the bridge looks it up.
+ */
+export function channelKind(c) {
+  if (!c || typeof c !== 'object') return null;
+  if (c.is_im) return 'im';
+  if (c.is_mpim) return 'mpim';
+  if (c.is_private || c.is_group) return 'group';
+  return c.is_channel ? 'channel' : null;
 }
 
 /** The environment a run's hooks read. The operator is the unset default. */
@@ -114,5 +141,5 @@ export function roleNote(role, userId, source = 'Slack') {
  * teammate without those modules learning about roles.
  */
 export function gateUserFor(roles, event, operator) {
-  return roles.roleOf(event?.user, event?.channel) ? event.user : operator;
+  return roles.roleOf(event?.user, event?.channel, event?.channel_type) ? event.user : operator;
 }

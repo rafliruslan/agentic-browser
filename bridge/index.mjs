@@ -24,7 +24,7 @@ import { parseMention, formatResult } from './text.mjs';
 import { buildBlocks } from './blocks.mjs';
 import { spawn } from 'node:child_process';
 import { runAgent } from './runner.mjs';
-import { createRoles, gateUserFor, requesterEnv, roleNote, TEAM, TEAM_DENIED_TOOLS } from './roles.mjs';
+import { channelKind, createRoles, gateUserFor, requesterEnv, roleNote, TEAM, TEAM_DENIED_TOOLS } from './roles.mjs';
 import { transcriptPathFor } from './mirror.mjs';
 import { readIdentity, identityNote } from './identity.mjs';
 import { healBrowser } from './browser-health.mjs';
@@ -199,6 +199,26 @@ async function main() {
   // The operator, plus optional teammates in listed channels only. See roles.mjs.
   const roles = createRoles({ operator: ALLOWED_USER, teamUsers: TEAM_USERS, teamChannels: TEAM_CHANNELS });
 
+  // Under TEAM_CHANNELS=*, a teammate's role depends on whether the
+  // conversation is a channel or a (group) DM. A message event says so in
+  // channel_type; an app_mention does not, so ask Slack once per channel. A
+  // failed lookup is not cached and leaves the kind unknown, which roleOf
+  // refuses.
+  const kinds = new Map();
+  async function withKind(event, client) {
+    if (event.channel_type || !roles.needsKind(event.user, event.channel)) return;
+    if (!kinds.has(event.channel)) {
+      try {
+        const r = await client.conversations.info({ channel: event.channel });
+        kinds.set(event.channel, channelKind(r.channel));
+      } catch (err) {
+        console.error(`[agent] could not look up ${event.channel}: ${err.data?.error || err.message}`);
+        return;
+      }
+    }
+    event.channel_type = kinds.get(event.channel) ?? undefined;
+  }
+
   // Which browser is attached, read once. A warning rather than a throw: losing
   // the browser should not cost you the channel you would use to ask about it.
   ALLOWED_TOOLS = await allowedTools(MCP_CONFIG);
@@ -281,6 +301,7 @@ async function main() {
   // older behaviour, where a plain reply in a followed thread was enough.
   app.event('message', async ({ event, client }) => {
     if (!channelAllowed(ALLOWED_CHANNEL, event.channel)) return;
+    await withKind(event, client);
 
     // Before the subscription gate, deliberately. A thread is subscribed only
     // after the agent has replied, so during the run you want to stop it is
@@ -329,7 +350,7 @@ async function main() {
     const startedBy = runs.startedBy(threadTs);
     // A teammate may stop or steer only a run they started. The operator may
     // end any run.
-    const sender = roles.roleOf(event.user, event.channel);
+    const sender = roles.roleOf(event.user, event.channel, event.channel_type);
     if (sender === TEAM && startedBy && startedBy.user !== event.user) {
       await client.chat.postMessage({
         channel: event.channel,
@@ -374,7 +395,7 @@ async function main() {
   async function handleTurn({ event, client, text }) {
     // The whole access control. Anyone else in the channel is ignored in
     // silence: replying would tell an unauthorised user the bot is listening.
-    const role = roles.roleOf(event.user, event.channel);
+    const role = roles.roleOf(event.user, event.channel, event.channel_type);
     if (!role) {
       console.log(`[agent] ignored mention from ${event.user}`);
       return;
@@ -598,7 +619,8 @@ async function main() {
   app.event('app_mention', async ({ event, client }) => {
     // Before handleInterrupt, which has no user check of its own: anyone able to
     // tag her could otherwise end a run with `!stop`.
-    if (!roles.roleOf(event.user, event.channel)) {
+    await withKind(event, client);
+    if (!roles.roleOf(event.user, event.channel, event.channel_type)) {
       console.log(`[agent] ignored mention from ${event.user}`);
       return;
     }

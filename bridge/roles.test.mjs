@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRoles, parseList, requesterEnv, roleNote, gateUserFor, OPERATOR, TEAM, TEAM_DENIED_TOOLS } from './roles.mjs';
+import { channelKind, createRoles, parseList, requesterEnv, roleNote, gateUserFor, OPERATOR, TEAM, TEAM_DENIED_TOOLS } from './roles.mjs';
 
 const OP = 'U_OP';
 
@@ -29,13 +29,39 @@ test('a teammate is admitted only in a listed channel', () => {
 
 test('* admits teammates in any channel, except !ID ones and DMs', () => {
   const roles = createRoles({ operator: OP, teamUsers: 'U_A', teamChannels: '*,!C_PRIVATE' });
-  assert.equal(roles.roleOf('U_A', 'C_NEW'), TEAM);
-  assert.equal(roles.roleOf('U_A', 'G_OLD'), TEAM);
-  assert.equal(roles.roleOf('U_A', 'C_PRIVATE'), null);
-  assert.equal(roles.roleOf('U_A', 'D_DM'), null);
-  assert.equal(roles.roleOf('U_X', 'C_NEW'), null);
+  assert.equal(roles.roleOf('U_A', 'C_NEW', 'channel'), TEAM);
+  assert.equal(roles.roleOf('U_A', 'G_OLD', 'group'), TEAM);
+  assert.equal(roles.roleOf('U_A', 'C_PRIVATE', 'channel'), null);
+  assert.equal(roles.roleOf('U_A', 'D_DM', 'im'), null);
+  assert.equal(roles.roleOf('U_X', 'C_NEW', 'channel'), null);
   assert.equal(roles.roleOf(OP, 'C_PRIVATE'), OPERATOR);
   assert.equal(roles.teamEnabled, true);
+});
+
+// A group DM's id starts with C or G, like a channel's, so only its kind tells.
+test('* never admits a teammate in a group DM, or where the kind is unknown', () => {
+  const roles = createRoles({ operator: OP, teamUsers: 'U_A', teamChannels: '*,C_LISTED' });
+  assert.equal(roles.roleOf('U_A', 'C_MPDM', 'mpim'), null);
+  assert.equal(roles.roleOf('U_A', 'G_MPDM', 'mpim'), null);
+  assert.equal(roles.roleOf('U_A', 'C_NEW'), null, 'an app_mention whose lookup failed');
+  assert.equal(roles.roleOf('U_A', '', 'channel'), null);
+  assert.equal(roles.roleOf('U_A', undefined, 'channel'), null);
+  assert.equal(roles.roleOf('U_A', 'C_LISTED'), TEAM, 'a channel listed by id needs no kind');
+  assert.equal(roles.needsKind('U_A', 'C_NEW'), true);
+  assert.equal(roles.needsKind('U_A', 'C_LISTED'), false);
+  assert.equal(roles.needsKind('U_X', 'C_NEW'), false, 'no lookup for someone who is not a teammate');
+  assert.equal(roles.needsKind(OP, 'C_NEW'), false);
+  assert.equal(createRoles({ operator: OP, teamUsers: 'U_A', teamChannels: 'C1' }).needsKind('U_A', 'C2'), false);
+});
+
+test('channelKind reads conversations.info', () => {
+  assert.equal(channelKind({ is_channel: true }), 'channel');
+  assert.equal(channelKind({ is_channel: true, is_private: true }), 'group');
+  assert.equal(channelKind({ is_group: true }), 'group');
+  assert.equal(channelKind({ is_mpim: true, is_private: true, is_group: true }), 'mpim');
+  assert.equal(channelKind({ is_im: true }), 'im');
+  assert.equal(channelKind({}), null);
+  assert.equal(channelKind(undefined), null);
 });
 
 test('only !ID entries admit nobody (fail closed)', () => {
