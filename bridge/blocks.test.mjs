@@ -47,6 +47,33 @@ test('parseInline builds a user mention', () => {
   ]);
 });
 
+// A group mention once went out as a broadcast with range "subteam^S...", and
+// Slack rejected the whole message with invalid_blocks.
+test('parseInline turns a user group mention into a usergroup element', () => {
+  assert.deepEqual(parseInline('for <!subteam^S0TEAM00001> and <!subteam^S0TEAM00002|@ops>'), [
+    { type: 'text', text: 'for ' },
+    { type: 'usergroup', usergroup_id: 'S0TEAM00001' },
+    { type: 'text', text: ' and ' },
+    { type: 'usergroup', usergroup_id: 'S0TEAM00002' },
+  ]);
+});
+
+test('parseInline keeps here, channel and everyone as broadcasts', () => {
+  assert.deepEqual(parseInline('<!here> <!channel|channel> <!everyone>'), [
+    { type: 'broadcast', range: 'here' },
+    { type: 'text', text: ' ' },
+    { type: 'broadcast', range: 'channel' },
+    { type: 'text', text: ' ' },
+    { type: 'broadcast', range: 'everyone' },
+  ]);
+});
+
+test('parseInline turns an unknown <!...> token into its label, never a broadcast', () => {
+  assert.deepEqual(parseInline('at <!date^1791339355^{time}|10:00>'), [
+    { type: 'text', text: 'at 10:00' },
+  ]);
+});
+
 // rich_text takes literal characters, unlike mrkdwn which needs them escaped.
 test('parseInline decodes escaped entities', () => {
   assert.deepEqual(parseInline('Product &amp; Engineering'), [

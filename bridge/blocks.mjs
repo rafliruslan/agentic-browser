@@ -62,7 +62,14 @@ function angleToken(token) {
 
   if (/^@[UW][A-Z0-9]+$/.test(head)) return { type: 'user', user_id: head.slice(1) };
   if (/^#[C][A-Z0-9]+$/.test(head)) return { type: 'channel', channel_id: head.slice(1) };
-  if (/^!/.test(head)) return { type: 'broadcast', range: head.slice(1) };
+  // A user group is `<!subteam^S...>`, not a broadcast: `subteam^S...` is no
+  // valid range, and Slack rejects the whole message with `invalid_blocks`.
+  const group = head.match(/^!subteam\^(S[A-Z0-9]+)$/);
+  if (group) return { type: 'usergroup', usergroup_id: group[1] };
+  const broadcast = head.match(/^!(here|channel|everyone)$/);
+  if (broadcast) return { type: 'broadcast', range: broadcast[1] };
+  // Any other `<!...>` (a date, say) has no element here: keep its label.
+  if (/^!/.test(head)) return { type: 'text', text: unescapeSlack(label || token) };
   if (/^https?:\/\//i.test(head) || /^mailto:/i.test(head)) {
     // A link's url is a literal field, so `&amp;` from mrkdwn becomes `&` again.
     const url = unescapeSlack(head);
