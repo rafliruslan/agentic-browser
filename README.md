@@ -298,6 +298,18 @@ it picks the work up and ✅ or ❌ when it finishes, which is visible from the
 channel list rather than only inside the thread. Without it those calls no-op
 and nothing else changes.
 
+### Teammates and other settings
+
+All optional, all in `~/.config/agentic-browser/env`; `config.example/env` has
+each one with a comment.
+
+| Setting | What it does |
+|---|---|
+| `TEAM_USERS` | Member ids of teammates, a second tier. Their turns get no shell, no free-prompt browser agent and no scheduling, and the hooks fence off credentials and operator-only pages. Unset: operator only. |
+| `TEAM_CHANNELS` | Where teammates are served: channel ids, `*` for every channel the bot is in, `!C...` to leave one out. Under `*` a DM or group DM never counts, and a channel whose kind Slack cannot confirm is refused. Empty: nowhere. |
+| `UNZIP_SANDBOX` | The `file` tool unpacks a `.zip` beside it and lists the files; nothing in it is run. The default strict profile has lower size caps and skips programs, scripts, installers and hidden files. `0` turns it off. |
+| `UPLOAD_BROWSER_SESSIONS` | Absolute path of the browser's sessions folder. `upload` may then send a file the browser saved to a session's `artifacts/` or `tmp/`, judged by its real path. Never on a teammate's turn. |
+
 Slack has no typing indicator for ordinary bots. The nearest equivalent is
 `assistant.threads.setStatus`, which needs the app configured as an AI
 assistant and only works inside assistant threads. The bridge calls it anyway
@@ -477,9 +489,10 @@ would not trust with your accounts.
 **Everything happens as you.** Messages come from you, not a bot. Calendar
 declines notify real colleagues. There is no undo layer.
 
-`ALLOWED_USER` is the entire access control: mentions from anyone else are
-ignored in silence, because replying would tell an unauthorised user the bot is
-listening.
+`ALLOWED_USER` is the entire access control unless you add teammates (see
+[Teammates and other settings](#teammates-and-other-settings)): mentions from
+anyone else are ignored in silence, because replying would tell an unauthorised
+user the bot is listening.
 
 **That gate has to hold in the transcript too, and it did not at first.** The
 agent reads the thread it was tagged into, and every non-bot message was

@@ -1,8 +1,9 @@
 # Copy to ~/.config/agentic-browser/env and chmod 600. Never commit the filled copy.
 #
-# ALLOWED_USER is the entire security boundary. There is no channel allowlist by
-# default: exactly one person may issue commands, anywhere the bot has been
-# invited, because a channel the bot is not in cannot deliver a mention at all.
+# ALLOWED_USER is the operator. With TEAM_USERS unset it is the entire security
+# boundary. There is no channel allowlist by default: exactly one person may
+# issue commands, anywhere the bot has been invited, because a channel the bot
+# is not in cannot deliver a mention at all.
 
 # Bot User OAuth Token, from OAuth & Permissions. Starts xoxb-
 SLACK_BOT_TOKEN=
@@ -21,6 +22,27 @@ ALLOWED_CHANNEL=*
 # Concurrent runs open their own tabs and do not interfere; the cap is about
 # memory and rate limits, not correctness.
 MAX_CONCURRENT=3
+
+# Optional. Teammates: a second, narrower tier (no shell, no credentials, no
+# operator-only pages). Member ids, comma-separated. Unset means operator only.
+TEAM_USERS=
+
+# Where teammates are served, comma-separated channel ids. "*" is every channel
+# the bot is in, "!C..." leaves one out. A DM or group DM never counts under "*".
+# Nothing listed means no teammate is served anywhere.
+TEAM_CHANNELS=
+
+# Optional. A .zip fetched with the `file` tool is unpacked under the strict
+# profile: lower size caps, and no programs, scripts, installers or hidden files.
+# 0 turns the strict profile off. Say so only for an agent you trust with
+# whatever a teammate sends.
+UNZIP_SANDBOX=1
+
+# Optional. Absolute path of the browser's sessions folder (Aside:
+# /Users/USERNAME/.aside/u/0/sessions). Lets `upload` send a file the browser
+# saved to a session's artifacts/ or tmp/ folder, for an agent with no shell to
+# copy it out. Never on a teammate's turn. Unset: off.
+UPLOAD_BROWSER_SESSIONS=
 
 # Optional. Linear as a second front door; see ../linear-relay/README.md.
 # All three, or none. LINEAR_AGENT is hammock or tara, the name the relay knows
