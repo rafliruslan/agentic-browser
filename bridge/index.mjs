@@ -37,6 +37,7 @@ import { parseInterrupt } from './interrupt.mjs';
 import { createRunRegistry } from './runs.mjs';
 import { createRelayClient, createLinearHandler, startPoller, runPolicy } from './linear.mjs';
 import { watchOwnBinary } from './binary-watch.mjs';
+import { watchSocket } from './socket-watch.mjs';
 
 const { App } = bolt;
 
@@ -731,6 +732,15 @@ async function main() {
   // launchd restarts it on the current one. Releases the lock first, the same
   // as a signal does. See binary-watch.mjs.
   watchOwnBinary({ log: console, exit: (code) => { release().finally(() => process.exit(code)); } });
+
+  // When the Slack socket goes down and does not come back, exit the same way,
+  // so launchd starts a bridge with a fresh one. See socket-watch.mjs.
+  watchSocket({
+    client: app.receiver.client,
+    busy: () => runs.size() > 0,
+    log: console,
+    exit: (code) => { release().finally(() => process.exit(code)); },
+  });
 
   // Linear, when the env names a relay. After the lock, so a refused duplicate
   // bridge never polls and never answers an event twice.
