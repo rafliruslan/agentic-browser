@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   detectService, jobName, sq, waiterScript, launchdPlist, schedule, parseArgs,
+  parseLaunchctlList, ancestorPids,
 } from './restart-self.mjs';
 
 test('macOS: a run under a launchd job sees the job label', () => {
@@ -17,6 +18,30 @@ test('macOS: a terminal is not a service', () => {
   for (const name of [undefined, '', '0', 'application.com.mitchellh.ghostty.123.456']) {
     assert.equal(detectService({ platform: 'darwin', env: { XPC_SERVICE_NAME: name } }), null, String(name));
   }
+});
+
+// What the agent's Bash tool sees on macOS: no XPC_SERVICE_NAME, so the
+// parent chain has to name the bridge.
+const LIST = 'PID\tStatus\tLabel\n22120\t0\tcom.agentic-browser.bridge\n-\t0\tcom.example.idle\n2784\t0\tapplication.com.mitchellh.ghostty.1.2\n';
+
+test('macOS: a run whose shell lost XPC_SERVICE_NAME finds the bridge among its parents', () => {
+  const jobs = parseLaunchctlList(LIST);
+  assert.equal(jobs.get('22120'), 'com.agentic-browser.bridge');
+  assert.equal(jobs.size, 2, 'a job with no pid is not running');
+  const got = detectService({ platform: 'darwin', env: {}, ancestors: ['900', '901', '22120', '1'], jobs });
+  assert.equal(got, 'com.agentic-browser.bridge');
+});
+
+test('macOS: a terminal among the parents is not a bridge, and stops the search', () => {
+  const jobs = parseLaunchctlList(LIST);
+  assert.equal(detectService({ platform: 'darwin', env: {}, ancestors: ['900', '2784', '22120'], jobs }), null);
+  assert.equal(detectService({ platform: 'darwin', env: {}, ancestors: ['900', '901'], jobs }), null);
+});
+
+test('ancestorPids walks ppid up to launchd', () => {
+  const parent = { 900: '901', 901: '22120', 22120: '1' };
+  const run = (cmd, args) => `  ${parent[args.at(-1)]}\n`;
+  assert.deepEqual(ancestorPids(run, 900), ['900', '901', '22120']);
 });
 
 test('Linux: the unit comes from the cgroup path', () => {
@@ -65,10 +90,11 @@ test('the launchd job runs once: KeepAlive false, RunAtLoad true', () => {
 
 /**
  * Run the waiter script against stubs. `pid` is the bridge's pid now, `busy`
- * how many idle checks find a child, `comesBack` whether a restart yields a new
+ * how many checks in a row find a child (or `checks`, one 1/0 per check, busy
+ * or idle; idle once they run out), `comesBack` whether a restart yields a new
  * pid. Every stub call is appended to `calls`.
  */
-function runWaiter(platform, { pid = '100', busy = 0, comesBack = true, maxWait = 30 } = {}) {
+function runWaiter(platform, { pid = '100', busy = 0, checks = null, comesBack = true, maxWait = 30 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'restart-self-'));
   const bin = join(dir, 'bin');
   const stub = (name, body) => {
@@ -78,9 +104,9 @@ function runWaiter(platform, { pid = '100', busy = 0, comesBack = true, maxWait 
   try {
     execFileSync('mkdir', ['-p', bin]);
     writeFileSync(join(dir, 'pid'), pid);
-    writeFileSync(join(dir, 'busy'), String(busy));
+    writeFileSync(join(dir, 'checks'), (checks ?? Array(busy).fill(1)).map((c) => `${c}\n`).join(''));
     const bump = comesBack ? 'echo $(( $(cat "$S/pid") + 1 )) > "$S/pid"' : ': > "$S/pid"';
-    stub('pgrep', 'n=$(cat "$S/busy"); [ "$n" -gt 0 ] || exit 1; echo $((n - 1)) > "$S/busy"; exit 0');
+    stub('pgrep', 'c=$(head -n 1 "$S/checks"); tail -n +2 "$S/checks" > "$S/rest"; mv "$S/rest" "$S/checks"; [ "$c" = 1 ]');
     stub('launchctl', [
       'case "$1" in',
       '  print) p=$(cat "$S/pid"); [ -n "$p" ] && printf "\\tpid = %s\\n\\tstate = running\\n" "$p"; exit 0;;',
@@ -125,10 +151,19 @@ test('a busy bridge is restarted only after its runs end', () => {
   const { calls, log } = runWaiter('darwin', { busy: 2 });
   const kick = calls.findIndex((c) => c.startsWith('launchctl kickstart'));
   const lastBusy = calls.map((c, i) => (c.startsWith('pgrep') ? i : -1)).filter((i) => i >= 0);
-  assert.equal(lastBusy.length, 3, 'two busy checks, then one idle');
-  assert.ok(kick > lastBusy.at(-1), 'restart comes after the idle check');
+  assert.equal(lastBusy.length, 4, 'two busy checks, then two idle');
+  assert.ok(kick > lastBusy.at(-1), 'restart comes after the idle checks');
   assert.match(log, /restarted, pid 100 -> 101/);
   assert.doesNotMatch(log, /still busy/);
+});
+
+test('a run that ends while the bridge is still posting does not trigger the restart', () => {
+  // Idle for one check (the run's process just exited), then busy again (the
+  // next queued run), then idle for good.
+  const { calls } = runWaiter('darwin', { checks: [1, 0, 1, 0, 0] });
+  const pg = calls.filter((c) => c.startsWith('pgrep')).length;
+  assert.equal(pg, 5, 'one idle check is not enough');
+  assert.equal(calls.filter((c) => c.startsWith('launchctl kickstart')).length, 1);
 });
 
 test('a bridge busy past the limit is restarted anyway, and says so', () => {

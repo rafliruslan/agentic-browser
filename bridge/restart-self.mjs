@@ -21,7 +21,8 @@
  * inline, so it needs no file under ~/Documents, which macOS guards per binary.
  *
  * What the job does: wait DELAY_S so the reply can post, then wait until the
- * bridge has no child process (no run in flight), restart it, and log the old
+ * bridge has had no child process (no run in flight) for two checks in a row,
+ * restart it, and log the old
  * and new pid. If the bridge stays busy for MAX_WAIT_S it restarts anyway; the
  * bridge reports a run cut off by a restart in its own thread.
  *
@@ -39,26 +40,64 @@ export const CHECK_S = 10;
 export const MAX_WAIT_S = 30 * 60;
 export const COME_BACK_S = 60;
 
+const defaultRun = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+
 export const stateDir = (env = process.env) =>
   join(env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'agentic-browser');
 
 /**
  * Which service this process runs under, or null.
  *
- * launchd puts the job label in XPC_SERVICE_NAME and every child inherits it,
- * so a run spawned by the bridge sees the bridge's label. A terminal sees "0"
- * or "application.<bundle id>", neither of which is a job to restart. Under
- * systemd the unit is the last part of the cgroup path; a terminal sits in a
- * .scope, and user@N.service is the whole user manager, never the bridge.
+ * launchd puts the job label in XPC_SERVICE_NAME, but a run's shell does not
+ * always keep it: the agent's Bash tool starts from a clean environment, and
+ * there the variable is gone. So on macOS the parent chain decides as well:
+ * the first ancestor that `launchctl list` names as a job is the bridge. A
+ * terminal is "0" or "application.<bundle id>", neither of which is a job to
+ * restart. Under systemd the unit is the last part of the cgroup path; a
+ * terminal sits in a .scope, and user@N.service is the whole user manager,
+ * never the bridge.
+ *
+ * `ancestors` is this process's parent pids, nearest first; `jobs` maps a pid
+ * to its launchd label (see `parseLaunchctlList`).
  */
-export function detectService({ platform = process.platform, env = process.env, cgroup = '' } = {}) {
+export function detectService({
+  platform = process.platform,
+  env = process.env,
+  cgroup = '',
+  ancestors = [],
+  jobs = new Map(),
+} = {}) {
   if (platform === 'darwin') {
-    const name = env.XPC_SERVICE_NAME;
-    if (!name || name === '0' || name.startsWith('application.')) return null;
-    return name;
+    const isJob = (name) => !!name && name !== '0' && !name.startsWith('application.');
+    if (isJob(env.XPC_SERVICE_NAME)) return env.XPC_SERVICE_NAME;
+    for (const pid of ancestors) {
+      const label = jobs.get(String(pid));
+      if (label) return isJob(label) ? label : null;
+    }
+    return null;
   }
   const unit = /\/([^/\s]+\.service)\s*$/m.exec(cgroup)?.[1];
   return unit && !unit.startsWith('user@') ? unit : null;
+}
+
+/** `launchctl list` (PID, Status, Label) -> Map of running pid -> label. */
+export function parseLaunchctlList(text) {
+  const jobs = new Map();
+  for (const line of String(text).split('\n')) {
+    const [pid, , label] = line.trim().split(/\s+/);
+    if (/^\d+$/.test(pid ?? '') && label) jobs.set(pid, label);
+  }
+  return jobs;
+}
+
+/** This process's parent pids, nearest first, up to (not including) launchd. */
+export function ancestorPids(run = defaultRun, start = process.ppid) {
+  const out = [];
+  for (let pid = start; pid > 1 && out.length < 64; ) {
+    out.push(String(pid));
+    try { pid = Number(run('ps', ['-o', 'ppid=', '-p', String(pid)]).trim()); } catch { break; }
+  }
+  return out;
 }
 
 /** The label of the one-shot job, derived so two bridges never share one. */
@@ -106,8 +145,13 @@ export function waiterScript({
           `finish() { :; }`,
         ]),
     `sleep ${delay}`,
-    `old=$(pid); waited=0`,
-    `while [ -n "$old" ] && pgrep -P "$old" >/dev/null 2>&1; do`,
+    // Idle twice in a row, one check apart: a run that just ended (or was
+    // killed for taking too long) leaves the bridge still posting its reply,
+    // and a restart in that gap cuts the reply off.
+    `old=$(pid); waited=0; idle=0`,
+    `while :; do`,
+    `  if [ -n "$old" ] && pgrep -P "$old" >/dev/null 2>&1; then idle=0; else idle=$((idle + 1)); fi`,
+    `  if [ "$idle" -ge 2 ]; then break; fi`,
     `  if [ "$waited" -ge ${maxWait} ]; then note "still busy after \${waited}s, restarting anyway"; break; fi`,
     `  sleep ${check}; waited=$((waited + ${check})); old=$(pid)`,
     `done`,
@@ -155,8 +199,6 @@ export function launchdPlist({ label, script, log }) {
 </plist>
 `;
 }
-
-const defaultRun = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
 /**
  * Check the service exists, replace any earlier one-shot for it, and start the
@@ -207,10 +249,15 @@ function main() {
     return 0;
   }
   let cgroup = '';
+  let ancestors = [];
+  let jobs = new Map();
   if (process.platform !== 'darwin') {
     try { cgroup = readFileSync('/proc/self/cgroup', 'utf8'); } catch {}
+  } else if (!args.service) {
+    ancestors = ancestorPids();
+    try { jobs = parseLaunchctlList(defaultRun('launchctl', ['list'])); } catch {}
   }
-  const service = args.service || detectService({ cgroup });
+  const service = args.service || detectService({ cgroup, ancestors, jobs });
   if (!service) {
     console.error('restart-self: not running under a bridge service. Pass --service <label>.');
     return 2;

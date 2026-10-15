@@ -383,10 +383,12 @@ skipped.
 An agent that edits its persona or the bridge needs its own bridge restarted,
 and cannot do it in the run that asks: the run is a child of the bridge and is
 cut off before it replies. `node bridge/restart-self.mjs` schedules a one-shot
-job outside the bridge that waits 40 s, then for no run in flight, restarts the
-service once and logs old and new pid to `restart-self.log` in the state
-directory. It finds the service from `XPC_SERVICE_NAME` (launchd) or the cgroup
-(systemd); `--service <label>` names another bridge. It exists because the
+job outside the bridge that waits 40 s, then until no run has been in flight
+for two checks in a row, restarts the service once and logs old and new pid to
+`restart-self.log` in the state directory. It finds the service from
+`XPC_SERVICE_NAME` or, since the agent's shell drops that, the first parent
+process that `launchctl list` names (launchd), or from the cgroup (systemd);
+`--service <label>` names another bridge. It exists because the
 improvised version, `launchctl submit` with `sleep; kickstart`, loops: a
 submitted job is KeepAlive, so it restarted the bridge every 30 seconds for
 hours, twice.
