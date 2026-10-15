@@ -47,8 +47,15 @@ const ctx = {
   // The run's cwd is the workspace. /tmp is listed as well as tmpdir() because
   // on macOS they differ, and screenshots land in both.
   uploadRoots: [process.cwd(), process.env.AGENT_WORKSPACE, tmpdir(), '/tmp'].filter(Boolean),
+  // The browser's sessions folder, for an agent with no shell to copy a saved screenshot out of
+  // it. Opt-in per deployment (UPLOAD_BROWSER_SESSIONS), and never on a teammate's turn: those
+  // folders hold whatever the operator had the browser open on.
+  browserSessions: process.env.AGENT_REQUESTER_ROLE === 'team' ? null : env.UPLOAD_BROWSER_SESSIONS || null,
   // For the `file` tool only. It is sent to slack.com and appears in no result.
   token: env.SLACK_BOT_TOKEN,
+  // A zip is unpacked under the strict profile unless the env file says UNZIP_SANDBOX=0.
+  // Only a deployment whose agent is trusted with whatever a teammate sends should say so.
+  unzipSandbox: env.UNZIP_SANDBOX !== '0',
 };
 
 const server = new Server({ name: 'slack', version: '0.1.0' }, { capabilities: { tools: {} } });

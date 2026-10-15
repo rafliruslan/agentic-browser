@@ -49,12 +49,12 @@ export function isLegacyOffice(name) {
 }
 
 /** A refusal whose message is fit to show the agent as it stands. */
-class OfficeError extends Error {}
+export class OfficeError extends Error {}
 
 /** Raised when the parts read together would inflate past the total ceiling. */
-class BudgetError extends OfficeError {
-  constructor() {
-    super(`Refused: the file inflates to more than ${MAX_TOTAL_INFLATED_BYTES} bytes in total.`);
+export class BudgetError extends OfficeError {
+  constructor(limit = MAX_TOTAL_INFLATED_BYTES) {
+    super(`Refused: the file inflates to more than ${limit} bytes in total.`);
   }
 }
 
@@ -62,11 +62,16 @@ class BudgetError extends OfficeError {
  * The entries of a zip, by name, as lazy readers.
  *
  * Each read draws on one shared budget of inflated bytes, so a file of many small
- * claims cannot add up to more than the ceiling.
+ * claims cannot add up to more than the ceiling. `meta` describes each entry from
+ * its directory record alone, without reading it: whether it is a folder or a
+ * symlink, and the Unix mode it was stored with.
  *
- * @returns {{ entries: Map<string, () => Buffer> } | { error: string }}
+ * @returns {{ entries: Map<string, () => Buffer>, meta: Map<string, object> } | { error: string }}
  */
-export function openZip(buf, { totalBudget = MAX_TOTAL_INFLATED_BYTES } = {}) {
+export function openZip(
+  buf,
+  { totalBudget = MAX_TOTAL_INFLATED_BYTES, maxEntryBytes = MAX_ENTRY_BYTES, maxEntries = MAX_ENTRIES } = {},
+) {
   if (!Buffer.isBuffer(buf) || buf.length < 22) return { error: 'Not a zip file (too short).' };
 
   // The end-of-central-directory record sits in the last 64 KB plus 22 bytes.
@@ -82,13 +87,15 @@ export function openZip(buf, { totalBudget = MAX_TOTAL_INFLATED_BYTES } = {}) {
   const count = buf.readUInt16LE(eocd + 10);
   const dirOffset = buf.readUInt32LE(eocd + 16);
   if (count === 0xffff || dirOffset === 0xffffffff) return { error: 'Zip64 archives are not supported.' };
-  if (count > MAX_ENTRIES) return { error: `Refused: the archive lists ${count} entries.` };
+  if (count > maxEntries) return { error: `Refused: the archive lists ${count} entries; the limit is ${maxEntries}.` };
 
   let spent = 0;
   const entries = new Map();
+  const meta = new Map();
   let p = dirOffset;
   for (let n = 0; n < count; n++) {
     if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) return { error: 'The zip directory is damaged.' };
+    const madeBy = buf.readUInt16LE(p + 4);
     const flags = buf.readUInt16LE(p + 8);
     const method = buf.readUInt16LE(p + 10);
     const csize = buf.readUInt32LE(p + 20);
@@ -96,13 +103,25 @@ export function openZip(buf, { totalBudget = MAX_TOTAL_INFLATED_BYTES } = {}) {
     const nameLen = buf.readUInt16LE(p + 28);
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
+    const external = buf.readUInt32LE(p + 38);
     const local = buf.readUInt32LE(p + 42);
     const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
     p += 46 + nameLen + extraLen + commentLen;
 
+    // The Unix mode sits in the top half of the external attributes when the
+    // archive was made on Unix (host 3), which includes macOS.
+    const mode = madeBy >> 8 === 3 ? external >>> 16 : 0;
+    meta.set(name, {
+      dir: name.endsWith('/') || (external & 0x10) !== 0,
+      symlink: (mode & 0o170000) === 0o120000,
+      mode,
+      size: usize,
+      encrypted: (flags & 1) !== 0,
+    });
+
     entries.set(name, () => {
       if (flags & 1) throw new OfficeError('The file is password-protected.');
-      if (usize > MAX_ENTRY_BYTES) throw new OfficeError(`"${name}" is too large to read.`);
+      if (usize > maxEntryBytes) throw new OfficeError(`"${name}" is too large to read.`);
       if (local + 30 > buf.length || buf.readUInt32LE(local) !== 0x04034b50) throw new OfficeError('The zip is damaged.');
       const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
       if (start + csize > buf.length) throw new OfficeError('The zip is damaged.');
@@ -111,24 +130,24 @@ export function openZip(buf, { totalBudget = MAX_TOTAL_INFLATED_BYTES } = {}) {
       if (method === 0) out = Buffer.from(raw);
       else if (method === 8) {
         // Stops at whichever ceiling is nearer, and only ever one byte past it.
-        const room = Math.min(MAX_ENTRY_BYTES, totalBudget - spent);
-        if (room <= 0) throw new BudgetError();
+        const room = Math.min(maxEntryBytes, totalBudget - spent);
+        if (room <= 0) throw new BudgetError(totalBudget);
         try {
           out = inflateRawSync(raw, { maxOutputLength: room });
         } catch (err) {
           if (err?.code === 'ERR_BUFFER_TOO_LARGE' || err instanceof RangeError) {
-            if (room < MAX_ENTRY_BYTES) throw new BudgetError();
-            throw new OfficeError(`Refused: "${name}" inflates to more than ${MAX_ENTRY_BYTES} bytes.`);
+            if (room < maxEntryBytes) throw new BudgetError(totalBudget);
+            throw new OfficeError(`Refused: "${name}" inflates to more than ${maxEntryBytes} bytes.`);
           }
           throw err;
         }
       } else throw new OfficeError(`Unsupported compression method ${method}.`);
       spent += out.length;
-      if (spent > totalBudget) throw new BudgetError();
+      if (spent > totalBudget) throw new BudgetError(totalBudget);
       return out;
     });
   }
-  return { entries };
+  return { entries, meta };
 }
 
 const ENTITY = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };

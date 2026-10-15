@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, symlink, lstat } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import { TOOLS, callTool, parseEnv, safeUploadPath, slackError, safeFileName, downloadSlackFile, privateDir } from './slack-tools.mjs';
+import { TOOLS, callTool, parseEnv, safeUploadPath, browserUploadRoot, slackError, safeFileName, downloadSlackFile, privateDir, isPlainZip } from './slack-tools.mjs';
 
 const TOKEN = 'xoxb-000000000000-SECRET-DO-NOT-LEAK';
 
@@ -101,6 +101,31 @@ test('post threads the message when given a thread, and not otherwise', async ()
   assert.equal('thread_ts' in client.calls[1].args, false);
 });
 
+test('post and edit send list lines as real rich_text lists, not typed bullets', async () => {
+  const client = fakeClient();
+  const text = 'Open items\n\n- LOA sent\n- GMP expired\n\n1. Ask Etana\n2. Chase principal';
+  await callTool('post', { channel: 'C1', text }, ctx(client));
+  await callTool('edit', { channel: 'C1', ts: '1.0', text }, ctx(client));
+  for (const call of client.calls) {
+    const lists = call.args.blocks[0].elements.filter((e) => e.type === 'rich_text_list');
+    assert.deepEqual(lists.map((l) => l.style), ['bullet', 'ordered']);
+    assert.deepEqual(lists.map((l) => l.elements.length), [2, 2]);
+    assert.equal(typeof call.args.text, 'string');
+  }
+});
+
+test('post and edit send a group tag as a usergroup element, which Slack accepts', async () => {
+  const client = fakeClient();
+  const text = '<!subteam^S0TEAM00001> <!subteam^S0TEAM00002> update posted';
+  await callTool('post', { channel: 'C1', text }, ctx(client));
+  await callTool('edit', { channel: 'C1', ts: '1.0', text }, ctx(client));
+  for (const call of client.calls) {
+    const kinds = call.args.blocks[0].elements[0].elements.map((e) => e.type);
+    assert.deepEqual(kinds, ['usergroup', 'text', 'usergroup', 'text']);
+    assert.equal(call.args.text, text);
+  }
+});
+
 test('reaction names lose their colons', async () => {
   const client = fakeClient();
   await callTool('react', { channel: 'C1', ts: '1.0', name: ':white_check_mark:' }, ctx(client));
@@ -171,6 +196,68 @@ test('an oversized file is refused', async () => {
 
 test('a missing file is reported, not thrown', async () => {
   assert.match((await safeUploadPath('/nope/nothing.png', ['/nope'])).error, /No such file/);
+});
+
+// --- the browser's save folder ---------------------------------------------------------
+
+/** A sessions folder with one session holding artifacts/ and tmp/, as the browser lays it out. */
+async function fakeSessions() {
+  const sessions = await mkdtemp(join(tmpdir(), 'sessions-'));
+  const session = join(sessions, '2026-10-11_AbC123xyz');
+  await mkdir(join(session, 'artifacts'), { recursive: true });
+  await mkdir(join(session, 'tmp'));
+  return { sessions, session };
+}
+
+test('a screenshot in a browser session artifacts folder uploads when the deployment opts in', async () => {
+  const { sessions, session } = await fakeSessions();
+  const f = join(session, 'artifacts', 'shot.jpg');
+  await writeFile(f, 'jpg');
+  const client = fakeClient();
+  const r = await callTool('upload', { channel: 'C1', thread_ts: '1.0', path: f }, ctx(client, { browserSessions: sessions }));
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.equal(client.calls[0].method, 'filesUploadV2');
+});
+
+test('the browser folder is closed unless the deployment opts in', async () => {
+  const { session } = await fakeSessions();
+  const f = join(session, 'artifacts', 'shot.jpg');
+  await writeFile(f, 'jpg');
+  const client = fakeClient();
+  const r = await callTool('upload', { channel: 'C1', path: f }, ctx(client));
+  assert.equal(r.isError, true);
+  assert.equal(client.calls.length, 0);
+});
+
+test('only artifacts and tmp of a session count, not the rest of the sessions folder', async () => {
+  const { sessions, session } = await fakeSessions();
+  await writeFile(join(session, 'messages.jsonl'), 'x');
+  await writeFile(join(sessions, 'top.png'), 'x');
+  await mkdir(join(sessions, 'not-a-session', 'artifacts'), { recursive: true });
+  await writeFile(join(sessions, 'not-a-session', 'artifacts', 'a.png'), 'x');
+  for (const p of [join(session, 'messages.jsonl'), join(sessions, 'top.png'), join(sessions, 'not-a-session', 'artifacts', 'a.png')]) {
+    assert.equal(await browserUploadRoot(p, sessions), null, p);
+  }
+});
+
+test('a link out of a browser session folder is judged by where it points', async () => {
+  const { sessions, session } = await fakeSessions();
+  const outside = await mkdtemp(join(tmpdir(), 'secret-'));
+  await writeFile(join(outside, 'id_rsa'), 'key');
+  await symlink(join(outside, 'id_rsa'), join(session, 'artifacts', 'innocent.png'));
+  const client = fakeClient();
+  const r = await callTool('upload', { channel: 'C1', path: join(session, 'artifacts', 'innocent.png') }, ctx(client, { browserSessions: sessions }));
+  assert.equal(r.isError, true);
+  assert.equal(client.calls.length, 0);
+});
+
+test('hidden files in a browser session folder are still refused', async () => {
+  const { sessions, session } = await fakeSessions();
+  await writeFile(join(session, 'artifacts', '.cookies'), 'x');
+  const client = fakeClient();
+  const r = await callTool('upload', { channel: 'C1', path: join(session, 'artifacts', '.cookies') }, ctx(client, { browserSessions: sessions }));
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /hidden/);
 });
 
 // --- env ---------------------------------------------------------------------------
@@ -359,4 +446,111 @@ test('fetching the same file twice replaces it', async () => {
     assert.equal(r.isError, undefined);
   }
   assert.equal(await readFile(join(root, 'F0ABC12345', 'a.pdf'), 'utf8'), 'two');
+});
+
+// --- zip files ---------------------------------------------------------------------
+
+/** A stored (uncompressed) zip of [name, content] pairs, enough for the file tool to unpack. */
+function storedZip(files) {
+  const locals = [];
+  const central = [];
+  let offset = 0;
+  for (const [name, content] of files) {
+    const data = Buffer.from(content);
+    const nameBuf = Buffer.from(name);
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt32LE(data.length, 18); lh.writeUInt32LE(data.length, 22); lh.writeUInt16LE(nameBuf.length, 26);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE((3 << 8) | 20, 4); ch.writeUInt32LE(data.length, 20); ch.writeUInt32LE(data.length, 24);
+    ch.writeUInt16LE(nameBuf.length, 28); ch.writeUInt32LE((0o100644 << 16) >>> 0, 38); ch.writeUInt32LE(offset, 42);
+    locals.push(lh, nameBuf, data);
+    central.push(ch, nameBuf);
+    offset += lh.length + nameBuf.length + data.length;
+  }
+  const dir = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(dir.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, dir, end]);
+}
+
+const zipFetch = (bytes) => async () => new Response(bytes, { status: 200, headers: { 'content-type': 'application/zip' } });
+
+test('only a plain zip is unpacked: Office files have their own reader', () => {
+  assert.equal(isPlainZip('art.zip', 'application/zip'), true);
+  assert.equal(isPlainZip('ART.ZIP', ''), true);
+  assert.equal(isPlainZip('download', 'application/x-zip-compressed'), true);
+  assert.equal(isPlainZip('deck.pptx', 'application/zip'), false);
+  assert.equal(isPlainZip('book.docx', ''), false);
+  assert.equal(isPlainZip('photo.png', 'image/png'), false);
+});
+
+test('file on a .zip saves it and unpacks it into a folder beside it, listing the files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const bytes = storedZip([['stiker/a.txt', 'alpha'], ['stiker/deep/b.txt', 'beta'], ['__MACOSX/stiker/._a.txt', 'junk']]);
+  const client = withFile({ id: 'F0ABC12345', name: 'stiker.zip', mimetype: 'application/zip', size: bytes.length, url_private_download: FILE_URL });
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn: zipFetch(bytes) }));
+  assert.equal(r.isError, undefined);
+  const out = join(root, 'F0ABC12345', 'stiker.zip.unpacked');
+  assert.equal(await readFile(join(root, 'F0ABC12345', 'stiker.zip')).then((b) => b.length), bytes.length);
+  assert.equal(await readFile(join(out, 'stiker/deep/b.txt'), 'utf8'), 'beta');
+  assert.match(r.content[0].text, /Unpacked 2 files/);
+  assert.match(r.content[0].text, /stiker\/a\.txt/);
+  assert.match(r.content[0].text, /Nothing in the archive was run/);
+  assert.equal(JSON.stringify(r).includes(TOKEN), false);
+});
+
+test('fetching a zip again replaces the unpack folder instead of mixing two', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const client = withFile({ id: 'F0ABC12345', name: 'a.zip', mimetype: 'application/zip', size: 10, url_private_download: FILE_URL });
+  const run = (bytes) => callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn: zipFetch(bytes) }));
+  await run(storedZip([['old.txt', 'old']]));
+  await run(storedZip([['new.txt', 'new']]));
+  const out = join(root, 'F0ABC12345', 'a.zip.unpacked');
+  assert.equal(await readFile(join(out, 'new.txt'), 'utf8'), 'new');
+  await assert.rejects(readFile(join(out, 'old.txt')));
+});
+
+test('a zip with a hostile name unpacks the rest and writes nothing outside its folder', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const bytes = storedZip([['../../escape.txt', 'evil'], ['ok.txt', 'fine']]);
+  const client = withFile({ id: 'F0ABC12345', name: 'x.zip', mimetype: 'application/zip', size: bytes.length, url_private_download: FILE_URL });
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn: zipFetch(bytes) }));
+  assert.match(r.content[0].text, /unsafe path/);
+  assert.equal(await readFile(join(root, 'F0ABC12345', 'x.zip.unpacked', 'ok.txt'), 'utf8'), 'fine');
+  await assert.rejects(readFile(join(root, 'F0ABC12345', 'escape.txt')));
+  await assert.rejects(readFile(join(root, 'escape.txt')));
+});
+
+test('the sandbox is the default for a zip; a deployment can opt out', async () => {
+  const bytes = storedZip([['tool.sh', '#!/bin/sh'], ['doc.txt', 'words']]);
+  const client = () => withFile({ id: 'F0ABC12345', name: 'x.zip', mimetype: 'application/zip', size: bytes.length, url_private_download: FILE_URL });
+  const strictRoot = await mkdtemp(join(tmpdir(), 'dl-'));
+  const strict = await callTool('file', { file: 'F0ABC12345' }, ctx(client(), { token: TOKEN, downloadRoot: strictRoot, fetchFn: zipFetch(bytes) }));
+  assert.match(strict.content[0].text, /program or script \(sandbox\)/);
+  await assert.rejects(readFile(join(strictRoot, 'F0ABC12345', 'x.zip.unpacked', 'tool.sh')));
+
+  const looseRoot = await mkdtemp(join(tmpdir(), 'dl-'));
+  const loose = await callTool('file', { file: 'F0ABC12345' }, ctx(client(), { token: TOKEN, downloadRoot: looseRoot, fetchFn: zipFetch(bytes), unzipSandbox: false }));
+  assert.doesNotMatch(loose.content[0].text, /Left out/);
+  assert.equal(await readFile(join(looseRoot, 'F0ABC12345', 'x.zip.unpacked', 'tool.sh'), 'utf8'), '#!/bin/sh');
+});
+
+test('a .zip that is not a zip is still saved, and the failure is explained', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const client = withFile({ id: 'F0ABC12345', name: 'bad.zip', mimetype: 'application/zip', size: 30, url_private_download: FILE_URL });
+  const r = await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn: zipFetch('definitely not a zip, just words') }));
+  assert.equal(r.isError, undefined);
+  assert.match(r.content[0].text, /Could not unpack it: Not a zip/);
+  assert.equal(await readFile(join(root, 'F0ABC12345', 'bad.zip'), 'utf8'), 'definitely not a zip, just words');
+});
+
+test('a download named like the unpack folder is not deleted by it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dl-'));
+  const bytes = storedZip([['a.txt', 'a']]);
+  // The zip is saved as "unpacked" and unpacks to "unpacked.unpacked": the two never share a name.
+  const client = withFile({ id: 'F0ABC12345', name: 'unpacked', mimetype: 'application/zip', size: bytes.length, url_private_download: FILE_URL });
+  await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn: zipFetch(bytes) }));
+  assert.equal((await readFile(join(root, 'F0ABC12345', 'unpacked'))).length, bytes.length);
+  assert.equal(await readFile(join(root, 'F0ABC12345', 'unpacked.unpacked', 'a.txt'), 'utf8'), 'a');
 });
