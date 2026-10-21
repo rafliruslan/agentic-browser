@@ -23,7 +23,7 @@ import { buildBlocks } from './blocks.mjs';
 import { extractOfficeText, isLegacyOffice, officeKind } from './office-text.mjs';
 import { describeUnpack, unpackZip } from './zip-unpack.mjs';
 import { sendRefusal } from './path-fence-hook.mjs';
-import { channelKind } from './roles.mjs';
+import { opsPrivate, parseList } from './roles.mjs';
 
 /** Largest file `upload` will send. A screenshot or a chart is a few MB. */
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
@@ -113,23 +113,19 @@ export async function safeUploadPath(path, roots, { maxBytes = MAX_UPLOAD_BYTES 
  * Why the path fence keeps this file out of Slack, or null. Uploading a file is reading
  * it on someone's behalf, so a teammate may not upload what their turn may not Read.
  * Without a fence config, a teammate's upload is refused outright: fail closed.
- * A file only the operations team may reach goes only into a DM or a private channel,
- * never a public one or a group DM, where the rest of the team would see it.
+ * A file only the operations team may reach goes only where nobody else can read it: the
+ * requester's own DM, or a private channel of ops alone (see opsPrivate). `members` is
+ * who may be in that channel: the ops users, the operator and the agent.
  */
-export async function uploadFenced(path, channel, { client, fence, env = process.env }) {
+export async function uploadFenced(path, channel, { client, fence, env = process.env, members = new Set() }) {
   const team = env.AGENT_REQUESTER_ROLE === 'team';
   if (!fence) return team ? 'Uploads for teammates need the path fence (UPLOAD_FENCE in the env file). Ask Rafli.' : null;
   if (fence.error) return `The path fence could not be read (${fence.error}); upload refused.`;
   const { reason, opsOnly } = sendRefusal(path, fence, env);
   if (reason) return `${basename(path)} ${reason}`;
   if (!opsOnly) return null;
-  let kind = null;
-  try {
-    kind = channelKind((await client.conversations.info({ channel })).channel);
-  } catch {
-    // unknown kind: refused below
-  }
-  return kind === 'im' || kind === 'group' ? null : `${basename(path)} is for the operations team only: send it in a DM or a private channel, not here.`;
+  if (await opsPrivate(client, channel, { members, requester: env.AGENT_REQUESTER_ID })) return null;
+  return `${basename(path)} is for the operations team only: it goes only to the requester's DM, or a private channel of ops alone.`;
 }
 
 /** A browser session folder: a date, an underscore, then letters and digits. */
@@ -359,7 +355,7 @@ const fail = (s) => ({ content: [{ type: 'text', text: s }], isError: true });
  *   `unzipSandbox` (default true) picks the strict profile in zip-unpack.mjs.
  */
 export async function callTool(name, args = {}, ctx) {
-  const { client, botUserId, allowedUser, uploadRoots = [], browserSessions = null, token, downloadRoot = DEFAULT_DOWNLOAD_ROOT, fetchFn = fetch, unzipSandbox = true, fence = null, env = process.env } = ctx;
+  const { client, botUserId, allowedUser, uploadRoots = [], browserSessions = null, token, downloadRoot = DEFAULT_DOWNLOAD_ROOT, fetchFn = fetch, unzipSandbox = true, fence = null, env = process.env, opsMembers = new Set() } = ctx;
   try {
     switch (name) {
       case 'thread': {
@@ -465,7 +461,7 @@ export async function callTool(name, args = {}, ctx) {
         const browserRoot = await browserUploadRoot(args.path, browserSessions);
         const safe = await safeUploadPath(args.path, browserRoot ? [...uploadRoots, browserRoot] : uploadRoots);
         if (safe.error) return fail(safe.error);
-        const refused = await uploadFenced(safe.path, args.channel, { client, fence, env });
+        const refused = await uploadFenced(safe.path, args.channel, { client, fence, env, members: opsMembers });
         if (refused) return fail(refused);
         await client.filesUploadV2({
           channel_id: args.channel,

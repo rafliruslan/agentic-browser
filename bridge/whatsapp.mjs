@@ -1026,10 +1026,13 @@ export async function deliverReply({ reply, title, chatId, config, since = Date.
   return { ok, detail };
 }
 
-/** The AGENT_REQUESTER_* values for a person's turn, as the Slack bridge sets them. */
-export function turnEnvFor(who) {
+/**
+ * The AGENT_REQUESTER_* values for a person's turn, as the Slack bridge sets them. The ops
+ * exception holds only in a DM: a group reads the reply too.
+ */
+export function turnEnvFor(who, { dm = false } = {}) {
   if (who.role !== TEAM) return {};
-  return { AGENT_REQUESTER_ROLE: TEAM, AGENT_REQUESTER_ID: `wa:${who.label}`, ...(who.name ? { AGENT_REQUESTER_NAME: String(who.name) } : {}), ...(who.ops ? { AGENT_REQUESTER_OPS: '1' } : {}) };
+  return { AGENT_REQUESTER_ROLE: TEAM, AGENT_REQUESTER_ID: `wa:${who.label}`, ...(who.name ? { AGENT_REQUESTER_NAME: String(who.name) } : {}), ...(who.ops && dm ? { AGENT_REQUESTER_OPS: '1' } : {}) };
 }
 
 /** The path fence named by UPLOAD_FENCE, `{ error }` if it will not load, or null if unset. */
@@ -1042,7 +1045,7 @@ export async function loadFence(path) {
   }
 }
 
-export async function runAgentTurn({ prompt, who }) {
+export async function runAgentTurn({ prompt, who, dm = false }) {
   const [{ runAgent }, { PERSONA }, browser, roles, { transcriptPathFor }, { healBrowser }] = await Promise.all([
     import('./runner.mjs'),
     import('./persona.mjs'),
@@ -1069,7 +1072,7 @@ export async function runAgentTurn({ prompt, who }) {
       : []),
   ];
   const sessionId = randomUUID();
-  const env = { ...process.env, ...turnEnvFor(who) };
+  const env = { ...process.env, ...turnEnvFor(who, { dm }) };
   const spawnFn = (bin, args, opts) => spawn(bin, args, { ...opts, env: { ...opts.env, ...env } });
   const note = isTeam ? roles.roleNote(TEAM, `wa:${who.label}`, 'WhatsApp') : '';
   return runAgent({
@@ -1240,7 +1243,7 @@ async function handle({ c, config, state, env }) {
 
   const started = Date.now();
   // The reaction and the agent run side by side: the agent does not open WhatsApp.
-  const [result] = await Promise.all([runAgentTurn({ prompt, who: q.person }), reactAs('working')]);
+  const [result] = await Promise.all([runAgentTurn({ prompt, who: q.person, dm: c.kind === 'dm' }), reactAs('working')]);
   const secs = Math.round((Date.now() - started) / 1000);
 
   let reply = result.ok ? result.text : '';
@@ -1255,7 +1258,7 @@ async function handle({ c, config, state, env }) {
   if (failed) {
     reply = q.person.role === TEAM ? `Sorry, I hit an error on that one. ${boss ? `${boss} has` : 'The team has'} been told.` : '';
   }
-  const delivery = await deliverReply({ reply, title, chatId: read.chatId, config, since: started, boss, sessionsDir: sessionsDirFor(config, env), fence: await loadFence(env.UPLOAD_FENCE), turnEnv: turnEnvFor(q.person), group: c.kind === 'group' });
+  const delivery = await deliverReply({ reply, title, chatId: read.chatId, config, since: started, boss, sessionsDir: sessionsDirFor(config, env), fence: await loadFence(env.UPLOAD_FENCE), turnEnv: turnEnvFor(q.person, { dm: c.kind === 'dm' }), group: c.kind === 'group' });
   const sentOk = delivery.ok;
   done({ handled: hash });
   await reactAs(failed || !sentOk ? 'failed' : 'done');

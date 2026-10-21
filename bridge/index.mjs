@@ -24,7 +24,7 @@ import { parseMention, formatResult } from './text.mjs';
 import { buildBlocks } from './blocks.mjs';
 import { spawn } from 'node:child_process';
 import { runAgent } from './runner.mjs';
-import { channelKind, createRoles, gateUserFor, requesterEnv, roleNote, TEAM, TEAM_DENIED_TOOLS } from './roles.mjs';
+import { channelKind, createRoles, gateUserFor, opsPrivate, parseList, requesterEnv, roleNote, TEAM, TEAM_DENIED_TOOLS } from './roles.mjs';
 import { transcriptPathFor } from './mirror.mjs';
 import { readIdentity, identityNote } from './identity.mjs';
 import { healBrowser } from './browser-health.mjs';
@@ -431,8 +431,13 @@ async function main() {
         // best effort
       }
     }
+    // The ops exception only where nobody but ops can read the reply. See opsPrivate.
+    const opsHere =
+      role === TEAM &&
+      roles.isOps(event.user) &&
+      (await opsPrivate(client, event.channel, { members: new Set([...parseList(OPS_USERS), ALLOWED_USER, botUserId]), requester: event.user }));
     const spawnForTurn = (bin, args, opts) =>
-      spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, event.user, requesterName, { ops: roles.isOps(event.user) }) } });
+      spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, event.user, requesterName, { ops: opsHere }) } });
 
     await queue.add(threadTs, async () => {
       let ok = false;

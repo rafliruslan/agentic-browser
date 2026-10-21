@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { channelKind, createRoles, parseList, requesterEnv, roleNote, gateUserFor, OPERATOR, TEAM, TEAM_DENIED_TOOLS } from './roles.mjs';
+import { channelKind, createRoles, parseList, requesterEnv, roleNote, gateUserFor, opsPrivate, OPERATOR, TEAM, TEAM_DENIED_TOOLS } from './roles.mjs';
 
 const OP = 'U_OP';
 
@@ -139,4 +139,23 @@ test('ops is a subset of the team: only a listed teammate is ops, and only then 
   assert.equal(requesterEnv(TEAM, 'U1', 'A', { ops: true }).AGENT_REQUESTER_OPS, '1');
   assert.equal(requesterEnv(TEAM, 'U2', 'B').AGENT_REQUESTER_OPS, undefined);
   assert.deepEqual(requesterEnv(OPERATOR, 'UOP', '', { ops: true }), {});
+});
+
+test('opsPrivate: only the requester\'s own DM, or a private channel of ops alone, all pages checked', async () => {
+  const info = { D1: { is_im: true, user: 'U1' }, D2: { is_im: true, user: 'U2' }, G1: { is_private: true }, G2: { is_private: true }, G3: { is_private: true }, C1: { is_channel: true }, M1: { is_mpim: true } };
+  const pages = { G1: [['U1', 'UBOT'], ['UOP']], G2: [['U1'], ['U2']], G3: 'endless' };
+  const client = { conversations: {
+    info: async ({ channel }) => { if (!info[channel]) throw new Error('channel_not_found'); return { channel: info[channel] }; },
+    members: async ({ channel, cursor }) => {
+      if (pages[channel] === 'endless') return { members: ['U1'], response_metadata: { next_cursor: 'more' } };
+      const i = cursor ? Number(cursor) : 0;
+      const list = pages[channel];
+      return { members: list[i], response_metadata: { next_cursor: i + 1 < list.length ? String(i + 1) : '' } };
+    },
+  } };
+  const opts = { members: new Set(['U1', 'UOP', 'UBOT']), requester: 'U1' };
+  assert.equal(await opsPrivate(client, 'D1', opts), true);
+  assert.equal(await opsPrivate(client, 'G1', opts), true);
+  for (const ch of ['D2', 'G2', 'G3', 'C1', 'M1', 'nope']) assert.equal(await opsPrivate(client, ch, opts), false, ch);
+  assert.equal(await opsPrivate(client, 'D1', { ...opts, requester: '' }), false);
 });

@@ -20,7 +20,11 @@
  *
  * OPS_USERS names teammates in the operations team. They are still teammates in
  * every way above, except that the fence's `opsAllow` paths (inside `teamDeny`)
- * are open to them: AGENT_REQUESTER_OPS=1 tells the hooks and tools so.
+ * are open to them, and only in a conversation nobody else can read: their own
+ * DM with the agent, or a private channel whose members are all ops, the
+ * operator or the agent (see opsPrivate). A reply is posted where it was asked,
+ * so in any other place their turn is fenced like any teammate's.
+ * AGENT_REQUESTER_OPS=1 tells the hooks and tools that both hold.
  */
 
 export const OPERATOR = 'operator';
@@ -101,6 +105,30 @@ export function createRoles({ operator, teamUsers = '', teamChannels = '', opsUs
       return { users: users.size, channels: channels.size };
     },
   };
+}
+
+/**
+ * Whether `channel` is a place only the operations team can read: an IM with `requester`
+ * themselves, or a private channel whose every member is in `members` (ops, the operator,
+ * the agent). Anything else, a failed lookup or a member list too long to finish, is no.
+ */
+export async function opsPrivate(client, channel, { members, requester }) {
+  try {
+    const c = (await client.conversations.info({ channel })).channel;
+    const kind = channelKind(c);
+    if (kind === 'im') return !!requester && c.user === requester;
+    if (kind !== 'group') return false;
+    let cursor;
+    for (let page = 0; page < 20; page++) {
+      const r = await client.conversations.members({ channel, limit: 200, ...(cursor ? { cursor } : {}) });
+      if ((r.members || []).some((m) => !members.has(m))) return false;
+      cursor = r.response_metadata?.next_cursor;
+      if (!cursor) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 /**

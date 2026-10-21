@@ -702,7 +702,9 @@ test('attachments obey the path fence: teammates are refused barred files, ops g
     await writeFile(barred, 'x');
     const fence = loadFence(JSON.stringify({ teamDeny: [join(f.work, 'routines')], opsAllow: [barred] }));
     const team = turnEnvFor({ role: TEAM, label: 'Dana Hart', name: 'Dana' });
-    const ops = turnEnvFor({ role: TEAM, label: 'Robin', name: 'Robin', ops: true });
+    const ops = turnEnvFor({ role: TEAM, label: 'Robin', name: 'Robin', ops: true }, { dm: true });
+    // In a group the reply is read by everyone there, so ops counts for nothing.
+    assert.equal(turnEnvFor({ role: TEAM, label: 'Robin', name: 'Robin', ops: true }).AGENT_REQUESTER_OPS, undefined);
     const vet = (p, turnEnv, group, fz = fence) => vetAttachment(p, { roots: [f.work], fence: fz, turnEnv, group });
     assert.equal(ops.AGENT_REQUESTER_OPS, '1');
     assert.equal(team.AGENT_REQUESTER_OPS, undefined);

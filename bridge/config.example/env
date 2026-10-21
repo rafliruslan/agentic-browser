@@ -33,8 +33,10 @@ TEAM_USERS=
 TEAM_CHANNELS=
 
 # Optional. Teammates in the operations team (Slack user ids, comma-separated).
-# They reach the path fence's `opsAllow` paths, which teamDeny keeps from the rest.
-# In a WhatsApp config, mark a person "ops": true instead.
+# They reach the path fence's `opsAllow` paths, which teamDeny keeps from the rest,
+# but only where nobody else reads the reply: a private channel whose members are
+# all ops, the operator or the agent (or, on WhatsApp, a DM). Elsewhere they are
+# fenced like any teammate. In a WhatsApp config, mark a person "ops": true.
 OPS_USERS=
 
 # Optional. The path fence JSON the agent's file tools use. Set it and Slack

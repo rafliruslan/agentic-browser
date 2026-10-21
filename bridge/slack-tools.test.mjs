@@ -556,7 +556,7 @@ test('a download named like the unpack folder is not deleted by it', async () =>
   assert.equal(await readFile(join(root, 'F0ABC12345', 'unpacked.unpacked', 'a.txt'), 'utf8'), 'a');
 });
 
-test('upload obeys the path fence: teammates are refused barred files, ops only in a DM or private channel', async () => {
+test('upload obeys the path fence: teammates are refused barred files, ops only where only ops can read', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'upload-fence-'));
   const routines = join(dir, 'routines');
   await mkdir(routines, { recursive: true });
@@ -565,18 +565,24 @@ test('upload obeys the path fence: teammates are refused barred files, ops only 
   await writeFile(payouts, 'x');
   await writeFile(plain, 'x');
   const fence = loadConfig(JSON.stringify({ teamDeny: [routines], opsAllow: [payouts], denyNames: ['^credentials'] }));
-  const kinds = { D1: { is_im: true }, G1: { is_private: true }, C1: { is_channel: true }, M1: { is_mpim: true } };
-  const client = { conversations: { info: async ({ channel }) => ({ channel: kinds[channel] }) } };
-  const team = { AGENT_REQUESTER_ROLE: 'team' };
+  const kinds = { D1: { is_im: true, user: 'UOPS' }, D2: { is_im: true, user: 'UOTHER' }, G1: { is_private: true }, G2: { is_private: true }, C1: { is_channel: true }, M1: { is_mpim: true } };
+  const memberLists = { G1: ['UOPS', 'UBOSS', 'UBOT'], G2: ['UOPS', 'UOTHER'] };
+  const client = { conversations: {
+    info: async ({ channel }) => ({ channel: kinds[channel] }),
+    members: async ({ channel }) => ({ members: memberLists[channel] || [] }),
+  } };
+  const members = new Set(['UOPS', 'UBOSS', 'UBOT']);
+  const team = { AGENT_REQUESTER_ROLE: 'team', AGENT_REQUESTER_ID: 'UOPS' };
   const ops = { ...team, AGENT_REQUESTER_OPS: '1' };
-  const up = (path, channel, env, f = fence) => uploadFenced(path, channel, { client, fence: f, env });
+  const up = (path, channel, env, f = fence) => uploadFenced(path, channel, { client, fence: f, env, members });
 
   assert.equal(await up(payouts, 'C1', {}), null, 'operator');
   assert.equal(await up(plain, 'C1', team), null, 'a plain file for a teammate');
   assert.match(await up(payouts, 'D1', team), /not available/);
   assert.equal(await up(payouts, 'D1', ops), null);
   assert.equal(await up(payouts, 'G1', ops), null);
-  for (const ch of ['C1', 'M1', 'unknown']) assert.match(await up(payouts, ch, ops), /operations team only/, ch);
+  // Someone else's DM with the agent, or a private channel with a non-ops member, is refused.
+  for (const ch of ['C1', 'M1', 'D2', 'G2', 'unknown']) assert.match(await up(payouts, ch, ops), /operations team only/, ch);
   // No fence: a teammate gets nothing, the operator is unchanged. A broken fence refuses everyone.
   assert.match(await up(plain, 'C1', team, null), /need the path fence/);
   assert.equal(await up(plain, 'C1', {}, null), null);
