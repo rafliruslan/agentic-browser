@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, rmSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadRepoConfig, toolsFor, callTool, TOOL_NAMES } from './repos-tools.mjs';
+import { loadRepoConfig, toolsFor, callTool, forbiddenHit, TOOL_NAMES } from './repos-tools.mjs';
 
 const CONFIG = loadRepoConfig(JSON.stringify({
   _why: 'notes are ignored',
@@ -325,12 +325,13 @@ test('a branch cut from main pushes and opens a PR against main', async () => {
 });
 
 test('list_prs and merge_pr: only PRs into main or the preview branch, open, not draft, pinned to the read sha', async () => {
-  const pr = (over) => ({ number: 7, state: 'open', merged: false, draft: false, title: 'T', head: { ref: 'tara/x', sha: 'abc123' }, base: { ref: 'develop' }, ...over });
-  const make = (prObj, mergeResult = { ok: true, status: 200, json: async () => ({ sha: 'deadbeefcafe' }) }) => {
+  const pr = (over) => ({ number: 7, state: 'open', merged: false, draft: false, title: 'T', head: { ref: 'tara/x', sha: 'abc123', repo: { full_name: 'example-org/site' } }, base: { ref: 'develop' }, ...over });
+  const make = (prObj, mergeResult = { ok: true, status: 200, json: async () => ({ sha: 'deadbeefcafe' }) }, files = [{ filename: 'index.html' }]) => {
     const calls = [];
     const fetchFn = async (url, init = {}) => {
       calls.push({ url, init });
       if (init.method === 'PUT') return mergeResult;
+      if (url.includes('/files?')) return { ok: true, status: 200, json: async () => files };
       return { ok: true, status: 200, json: async () => (url.includes('?') ? [prObj] : prObj) };
     };
     return { calls, ctx: { config: CONFIG, token: 'sekret-token', gitRoot: '/nonexistent-git', workRoot: mkdtempSync(join(tmpdir(), 'repos-pr-')), fetchFn, requesterName: 'Dewi' } };
@@ -354,6 +355,16 @@ test('list_prs and merge_pr: only PRs into main or the preview branch, open, not
     const bad = await callTool('merge_pr', { repo: 'site', number: 7 }, m.ctx);
     assert.equal(bad.isError, true, label);
     assert.ok(!m.calls.some((c) => c.init.method === 'PUT'), label);
+  }
+  // A fork, or a PR touching what push would refuse, is left to a person.
+  const fork = make(pr({ head: { ref: 'tara/x', sha: 'abc123', repo: { full_name: 'someone/site' } } }));
+  assert.match((await callTool('merge_pr', { repo: 'site', number: 7 }, fork.ctx)).content[0].text, /another repo/);
+  assert.ok(!fork.calls.some((c) => c.init.method === 'PUT'));
+  for (const files of [[{ filename: '.github/workflows/ci.yml' }], [{ filename: 'ci.yml', previous_filename: '.github/workflows/ci.yml' }], [{ filename: 'app/.env.prd' }]]) {
+    const m = make(pr(), undefined, files);
+    const r2 = await callTool('merge_pr', { repo: 'site', number: 7 }, m.ctx);
+    assert.equal(r2.isError, true, JSON.stringify(files));
+    assert.ok(!m.calls.some((c) => c.init.method === 'PUT'), JSON.stringify(files));
   }
   for (const number of [0, -1, 1.5, '7', null, 1e9]) {
     assert.equal((await callTool('merge_pr', { repo: 'site', number }, make(pr()).ctx)).isError, true, String(number));
@@ -385,5 +396,29 @@ test('the token never appears in any result', async () => {
   out.push(await callTool('push', { repo: 'site', message: 'm' }, ctx));
   out.push(await callTool('open_pr', { repo: 'site', title: 't' }, { ...ctx, fetchFn: async () => ({ ok: false, status: 403, json: async () => ({ message: 'bad sekret-token' }) }) }));
   assert.doesNotMatch(JSON.stringify(out), /sekret-token/);
+  rmSync(dir, { recursive: true });
+});
+
+test('env files: exactly .env.example passes, every other .env name and .envrc do not', () => {
+  for (const ok of ['.env.example', 'app/.env.example', 'env.js', 'docs/environment.md']) assert.equal(forbiddenHit(ok), null, ok);
+  for (const bad of ['.env', '.env.local', '.env.example.local', '.env.examples', 'app/.env.prd', '.envrc', 'sub/.envrc']) assert.ok(forbiddenHit(bad), bad);
+});
+
+test('moving a workflow file out of .github is refused, and nothing is committed', async () => {
+  const { dir, origin, ctx, work } = setup();
+  // Seed a workflow on develop, as a repo would have.
+  const seed = join(dir, 'seed');
+  sh(seed, 'checkout', '-q', 'develop');
+  mkdirSync(join(seed, '.github', 'workflows'), { recursive: true });
+  writeFileSync(join(seed, '.github', 'workflows', 'ci.yml'), 'on: push\n');
+  sh(seed, '-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '-A');
+  sh(seed, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'ci');
+  sh(seed, 'push', '-q', origin, 'develop');
+  await callTool('start_branch', { repo: 'site', name: 'mv' }, ctx);
+  renameSync(join(work, '.github', 'workflows', 'ci.yml'), join(work, 'ci.yml'));
+  const r = await callTool('push', { repo: 'site', message: 'm' }, ctx);
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /Refusing \.github\/workflows\/ci\.yml/);
+  assert.deepEqual(heads(origin), ['develop', 'main']);
   rmSync(dir, { recursive: true });
 });

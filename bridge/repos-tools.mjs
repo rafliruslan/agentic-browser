@@ -32,8 +32,9 @@ const MAX_FILE = 10 * 1024 * 1024;
 const FORBIDDEN = [
   [/^\.github\//, 'workflow files'],
   [/(^|\/)\.git(\/|$)/, 'a nested .git'],
-  // `.env.example` files hold no secrets and are normal to edit.
-  [/(^|\/)\.env(\.(?!example)|$)/, 'an env file'],
+  // Exactly `.env.example` holds no secrets and is normal to edit; `.env.example.local` is not it.
+  [/(^|\/)\.env(?!\.example$)(\.[^/]*)?$/, 'an env file'],
+  [/(^|\/)\.envrc$/, 'an env file'],
   [/\.(pem|key|p12|pfx|keystore)$/i, 'a key file'],
   [/(^|\/)(id_rsa|id_ed25519|id_ecdsa|credentials|\.netrc|\.npmrc)/, 'a credential file'],
   [/(^|\/)node_modules\//, 'node_modules'],
@@ -64,6 +65,12 @@ export function loadRepoConfig(text) {
   }
   if (!Object.keys(repos).length) throw new Error('repos config: no repos');
   return { org: c.org, author: { name: String(author.name).trim(), email: author.email }, repos, workRoot: c.workRoot };
+}
+
+/** Why `path` may not be pushed or merged by this tool, or null. */
+export function forbiddenHit(path) {
+  const hit = FORBIDDEN.find(([re]) => re.test(path));
+  return hit ? hit[1] : null;
 }
 
 const str = (description) => ({ type: 'string', description });
@@ -250,12 +257,13 @@ export async function callTool(name, args, ctx) {
       if (args.to && !cfg.direct) throw new Error(prOnly);
       const to = pickBranch(args.to, null, 'to');
       await git(['add', '-A']);
-      const staged = (await git(['diff', '--cached', '--name-only', '-z'])).stdout.split('\0').filter(Boolean);
+      // --no-renames lists both ends of a move, so moving a workflow file out of .github/ is caught.
+      const staged = (await git(['diff', '--cached', '--name-only', '--no-renames', '-z'])).stdout.split('\0').filter(Boolean);
       for (const f of staged) {
-        const hit = FORBIDDEN.find(([re]) => re.test(f));
+        const hit = forbiddenHit(f);
         if (hit) {
           await git(['reset', '-q'], { ok: true });
-          throw new Error(`Refusing ${f}: ${hit[1]} are not pushed by this tool. Nothing was committed.`);
+          throw new Error(`Refusing ${f}: ${hit} are not pushed by this tool. Nothing was committed.`);
         }
         const s = await stat(join(workTree, f)).catch(() => null);
         if (s && s.size > MAX_FILE) {
@@ -269,6 +277,10 @@ export async function callTool(name, args, ctx) {
       const from = (await git(['config', '--get', `branch.${branch}.taraFrom`], { ok: true })).stdout.trim() || base;
       const ahead = Number((await git(['rev-list', '--count', `origin/${from}..HEAD`])).stdout.trim());
       if (!ahead) throw new Error('Nothing to push: no changes on this branch.');
+      // Everything the branch would carry, not just this commit, through the same check.
+      const carried = (await git(['diff', '--name-only', '--no-renames', '-z', `origin/${from}...HEAD`])).stdout.split('\0').filter(Boolean);
+      const bad = carried.find((f) => forbiddenHit(f));
+      if (bad) throw new Error(`Refusing to push: the branch changes ${bad} (${forbiddenHit(bad)}). Start a new branch.`);
       const n = `${ahead} commit${ahead === 1 ? '' : 's'}`;
       const head = (await git(['rev-parse', '--short', 'HEAD'])).stdout.trim();
       if (to) {
@@ -327,6 +339,17 @@ export async function callTool(name, args, ctx) {
       if (pr.state !== 'open' || pr.merged) throw new Error(`PR #${number} is not open.`);
       if (!targetsOf(cfg).includes(pr.base?.ref)) throw new Error(`PR #${number} goes into "${pr.base?.ref}". Only PRs into main or ${base} can be merged here.`);
       if (pr.draft) throw new Error(`PR #${number} is a draft.`);
+      // Only a branch of this repo, never a fork, and nothing this tool would refuse to push.
+      if (pr.head?.repo?.full_name !== `${org}/${args.repo}`) throw new Error(`PR #${number} comes from another repo. A person merges that.`);
+      for (let page = 1; page <= 30; page++) {
+        const fr = await fetchFn(`${api}/${number}/files?per_page=100&page=${page}`, { headers });
+        if (!fr.ok) throw new Error(`GitHub would not list the files of PR #${number} (${fr.status}).`);
+        const files = await fr.json();
+        const bad = files.flatMap((f) => [f.filename, f.previous_filename]).find((f) => f && forbiddenHit(f));
+        if (bad) throw new Error(`PR #${number} changes ${bad} (${forbiddenHit(bad)}). A person merges that.`);
+        if (files.length < 100) break;
+        if (page === 30) throw new Error(`PR #${number} changes too many files to check. A person merges that.`);
+      }
       // Pinned to the commit just read, so a push in between cannot slip into the merge.
       const res = await fetchFn(`${api}/${number}/merge`, { method: 'PUT', headers, body: JSON.stringify({ merge_method: method, sha: pr.head?.sha, ...(credit ? { commit_message: credit } : {}) }) });
       const data = await res.json().catch(() => ({}));
