@@ -325,7 +325,7 @@ test('a branch cut from main pushes and opens a PR against main', async () => {
 });
 
 test('list_prs and merge_pr: only PRs into main or the preview branch, open, not draft, pinned to the read sha', async () => {
-  const pr = (over) => ({ number: 7, state: 'open', merged: false, draft: false, title: 'T', head: { ref: 'tara/x', sha: 'a'.repeat(40), repo: { full_name: 'example-org/site' } }, base: { ref: 'develop' }, ...over });
+  const pr = (over) => ({ number: 7, state: 'open', merged: false, draft: false, title: 'T', head: { ref: 'tara/x', sha: 'a'.repeat(40), repo: { full_name: 'example-org/site' } }, base: { ref: 'develop' }, changed_files: 1, ...over });
   const make = (prObj, mergeResult = { ok: true, status: 200, json: async () => ({ sha: 'deadbeefcafe' }) }, files = [{ filename: 'index.html' }]) => {
     const calls = [];
     const fetchFn = async (url, init = {}) => {
@@ -363,13 +363,20 @@ test('list_prs and merge_pr: only PRs into main or the preview branch, open, not
   assert.match((await callTool('merge_pr', { repo: 'site', number: 7 }, fork.ctx)).content[0].text, /another repo/);
   assert.ok(!fork.calls.some((c) => c.init.method === 'PUT'));
   for (const files of [[{ filename: '.github/workflows/ci.yml' }], [{ filename: 'ci.yml', previous_filename: '.github/workflows/ci.yml' }], [{ filename: 'app/.env.prd' }]]) {
+    // Count matches, so only the file rule can refuse it.
     const m = make(pr(), undefined, files);
     const r2 = await callTool('merge_pr', { repo: 'site', number: 7 }, m.ctx);
     assert.equal(r2.isError, true, JSON.stringify(files));
     assert.ok(!m.calls.some((c) => c.init.method === 'PUT'), JSON.stringify(files));
   }
-  const many = make(pr(), undefined, Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}` })));
-  assert.match((await callTool('merge_pr', { repo: 'site', number: 7 }, many.ctx)).content[0].text, /too many files/);
+  const many = make(pr({ changed_files: 300 }), undefined, Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}` })));
+  assert.match((await callTool('merge_pr', { repo: 'site', number: 7 }, many.ctx)).content[0].text, /every file/);
+  // A list that is missing, or shorter than the PR says, is refused rather than read as clean.
+  for (const [label, prOver, files] of [['no list', {}, null], ['short list', { changed_files: 2 }, [{ filename: 'a' }]], ['no count', { changed_files: undefined }, [{ filename: 'a' }]]]) {
+    const m = make(pr(prOver), undefined, files);
+    assert.equal((await callTool('merge_pr', { repo: 'site', number: 7 }, m.ctx)).isError, true, label);
+    assert.ok(!m.calls.some((c) => c.init.method === 'PUT'), label);
+  }
   assert.match((await callTool('merge_pr', { repo: 'site', number: 7 }, make(pr({ head: { ref: 'tara/x', sha: 'zz', repo: { full_name: 'example-org/site' } } })).ctx)).content[0].text, /no head commit/);
   for (const number of [0, -1, 1.5, '7', null, 1e9]) {
     assert.equal((await callTool('merge_pr', { repo: 'site', number }, make(pr()).ctx)).isError, true, String(number));

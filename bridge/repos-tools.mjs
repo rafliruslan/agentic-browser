@@ -347,9 +347,13 @@ export async function callTool(name, args, ctx) {
       if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`PR #${number} has no head commit to check.`);
       const cmp = await fetchFn(`https://api.github.com/repos/${org}/${args.repo}/compare/${encodeURIComponent(pr.base.ref)}...${sha}`, { headers });
       if (!cmp.ok) throw new Error(`GitHub would not compare PR #${number} (${cmp.status}).`);
-      const files = (await cmp.json()).files ?? [];
-      // The compare API stops at 300 files; past that the list is not the whole change.
-      if (files.length >= 300) throw new Error(`PR #${number} changes too many files to check. A person merges that.`);
+      const files = (await cmp.json().catch(() => ({}))).files;
+      // No list, a short one (the compare API stops at 300) or one that disagrees with the
+      // PR's own count is not the whole change, so it is refused, never taken as clean.
+      if (!Array.isArray(files)) throw new Error(`GitHub sent no file list for PR #${number}. A person merges that.`);
+      if (files.length >= 300 || !Number.isInteger(pr.changed_files) || pr.changed_files !== files.length) {
+        throw new Error(`Could not check every file of PR #${number}. A person merges that.`);
+      }
       const bad = files.flatMap((f) => [f.filename, f.previous_filename]).find((f) => f && forbiddenHit(f));
       if (bad) throw new Error(`PR #${number} changes ${bad} (${forbiddenHit(bad)}). A person merges that.`);
       // Pinned to the commit just read, so a push in between cannot slip into the merge.
