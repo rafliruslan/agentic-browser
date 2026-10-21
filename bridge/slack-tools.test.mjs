@@ -567,7 +567,7 @@ test('upload obeys the path fence: teammates are refused barred files, ops only 
   const fence = loadConfig(JSON.stringify({ teamDeny: [routines], opsAllow: [payouts], denyNames: ['^credentials'] }));
   const kinds = { D1: { is_im: true, user: 'UOPS' }, D2: { is_im: true, user: 'UOTHER' }, G1: { is_private: true }, G2: { is_private: true }, C1: { is_channel: true }, M1: { is_mpim: true } };
   const memberLists = { G1: ['UOPS', 'UBOSS', 'UBOT'], G2: ['UOPS', 'UOTHER'] };
-  const client = { conversations: {
+  const client = { users: { info: async ({ user }) => ({ user: { is_bot: false } }) }, conversations: {
     info: async ({ channel }) => ({ channel: kinds[channel] }),
     members: async ({ channel }) => ({ members: memberLists[channel] || [] }),
   } };

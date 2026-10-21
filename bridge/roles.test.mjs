@@ -143,8 +143,9 @@ test('ops is a subset of the team: only a listed teammate is ops, and only then 
 
 test('opsPrivate: only the requester\'s own DM, or a private channel of ops alone, all pages checked', async () => {
   const info = { D1: { is_im: true, user: 'U1' }, D2: { is_im: true, user: 'U2' }, G1: { is_private: true }, G2: { is_private: true }, G3: { is_private: true }, C1: { is_channel: true }, M1: { is_mpim: true } };
-  const pages = { G1: [['U1', 'UBOT'], ['UOP']], G2: [['U1'], ['U2']], G3: 'endless' };
-  const client = { conversations: {
+  // G1 also holds an app (B-prefixed here), which does not count as a person.
+  const pages = { G1: [['U1', 'UBOT', 'BLINEAR'], ['UOP']], G2: [['U1'], ['U2']], G3: 'endless' };
+  const client = { users: { info: async ({ user }) => ({ user: { id: user, is_bot: user.startsWith('B') } }) }, conversations: {
     info: async ({ channel }) => { if (!info[channel]) throw new Error('channel_not_found'); return { channel: info[channel] }; },
     members: async ({ channel, cursor }) => {
       if (pages[channel] === 'endless') return { members: ['U1'], response_metadata: { next_cursor: 'more' } };
