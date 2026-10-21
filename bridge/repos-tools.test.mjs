@@ -325,13 +325,13 @@ test('a branch cut from main pushes and opens a PR against main', async () => {
 });
 
 test('list_prs and merge_pr: only PRs into main or the preview branch, open, not draft, pinned to the read sha', async () => {
-  const pr = (over) => ({ number: 7, state: 'open', merged: false, draft: false, title: 'T', head: { ref: 'tara/x', sha: 'abc123', repo: { full_name: 'example-org/site' } }, base: { ref: 'develop' }, ...over });
+  const pr = (over) => ({ number: 7, state: 'open', merged: false, draft: false, title: 'T', head: { ref: 'tara/x', sha: 'a'.repeat(40), repo: { full_name: 'example-org/site' } }, base: { ref: 'develop' }, ...over });
   const make = (prObj, mergeResult = { ok: true, status: 200, json: async () => ({ sha: 'deadbeefcafe' }) }, files = [{ filename: 'index.html' }]) => {
     const calls = [];
     const fetchFn = async (url, init = {}) => {
       calls.push({ url, init });
       if (init.method === 'PUT') return mergeResult;
-      if (url.includes('/files?')) return { ok: true, status: 200, json: async () => files };
+      if (url.includes('/compare/')) return { ok: true, status: 200, json: async () => ({ files }) };
       return { ok: true, status: 200, json: async () => (url.includes('?') ? [prObj] : prObj) };
     };
     return { calls, ctx: { config: CONFIG, token: 'sekret-token', gitRoot: '/nonexistent-git', workRoot: mkdtempSync(join(tmpdir(), 'repos-pr-')), fetchFn, requesterName: 'Dewi' } };
@@ -344,8 +344,10 @@ test('list_prs and merge_pr: only PRs into main or the preview branch, open, not
   assert.equal(r.isError, undefined, r.content[0].text);
   assert.match(r.content[0].text, /Merged PR #7 into develop \(deadbee\)/);
   const put = ok.calls.find((c) => c.init.method === 'PUT');
+  // The files checked are those of the pinned commit, not whatever the PR holds later.
+  assert.ok(ok.calls.some((c) => c.url.endsWith(`/repos/example-org/site/compare/develop...${'a'.repeat(40)}`)));
   assert.match(put.url, /\/pulls\/7\/merge$/);
-  assert.deepEqual(JSON.parse(put.init.body), { merge_method: 'merge', sha: 'abc123', commit_message: 'Requested by Dewi (Slack).' });
+  assert.deepEqual(JSON.parse(put.init.body), { merge_method: 'merge', sha: 'a'.repeat(40), commit_message: 'Requested by Dewi (Slack).' });
 
   const prod = await callTool('merge_pr', { repo: 'site', number: 7 }, make(pr({ base: { ref: 'main' } })).ctx);
   assert.match(prod.content[0].text, /production/);
@@ -357,7 +359,7 @@ test('list_prs and merge_pr: only PRs into main or the preview branch, open, not
     assert.ok(!m.calls.some((c) => c.init.method === 'PUT'), label);
   }
   // A fork, or a PR touching what push would refuse, is left to a person.
-  const fork = make(pr({ head: { ref: 'tara/x', sha: 'abc123', repo: { full_name: 'someone/site' } } }));
+  const fork = make(pr({ head: { ref: 'tara/x', sha: 'a'.repeat(40), repo: { full_name: 'someone/site' } } }));
   assert.match((await callTool('merge_pr', { repo: 'site', number: 7 }, fork.ctx)).content[0].text, /another repo/);
   assert.ok(!fork.calls.some((c) => c.init.method === 'PUT'));
   for (const files of [[{ filename: '.github/workflows/ci.yml' }], [{ filename: 'ci.yml', previous_filename: '.github/workflows/ci.yml' }], [{ filename: 'app/.env.prd' }]]) {
@@ -366,6 +368,9 @@ test('list_prs and merge_pr: only PRs into main or the preview branch, open, not
     assert.equal(r2.isError, true, JSON.stringify(files));
     assert.ok(!m.calls.some((c) => c.init.method === 'PUT'), JSON.stringify(files));
   }
+  const many = make(pr(), undefined, Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}` })));
+  assert.match((await callTool('merge_pr', { repo: 'site', number: 7 }, many.ctx)).content[0].text, /too many files/);
+  assert.match((await callTool('merge_pr', { repo: 'site', number: 7 }, make(pr({ head: { ref: 'tara/x', sha: 'zz', repo: { full_name: 'example-org/site' } } })).ctx)).content[0].text, /no head commit/);
   for (const number of [0, -1, 1.5, '7', null, 1e9]) {
     assert.equal((await callTool('merge_pr', { repo: 'site', number }, make(pr()).ctx)).isError, true, String(number));
   }

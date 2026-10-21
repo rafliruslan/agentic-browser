@@ -341,17 +341,19 @@ export async function callTool(name, args, ctx) {
       if (pr.draft) throw new Error(`PR #${number} is a draft.`);
       // Only a branch of this repo, never a fork, and nothing this tool would refuse to push.
       if (pr.head?.repo?.full_name !== `${org}/${args.repo}`) throw new Error(`PR #${number} comes from another repo. A person merges that.`);
-      for (let page = 1; page <= 30; page++) {
-        const fr = await fetchFn(`${api}/${number}/files?per_page=100&page=${page}`, { headers });
-        if (!fr.ok) throw new Error(`GitHub would not list the files of PR #${number} (${fr.status}).`);
-        const files = await fr.json();
-        const bad = files.flatMap((f) => [f.filename, f.previous_filename]).find((f) => f && forbiddenHit(f));
-        if (bad) throw new Error(`PR #${number} changes ${bad} (${forbiddenHit(bad)}). A person merges that.`);
-        if (files.length < 100) break;
-        if (page === 30) throw new Error(`PR #${number} changes too many files to check. A person merges that.`);
-      }
+      // Files of the exact commit the merge is pinned to, so a push between this check and
+      // the merge cannot swap in other files: GitHub refuses the merge if the head moved.
+      const sha = String(pr.head?.sha ?? '');
+      if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`PR #${number} has no head commit to check.`);
+      const cmp = await fetchFn(`https://api.github.com/repos/${org}/${args.repo}/compare/${encodeURIComponent(pr.base.ref)}...${sha}`, { headers });
+      if (!cmp.ok) throw new Error(`GitHub would not compare PR #${number} (${cmp.status}).`);
+      const files = (await cmp.json()).files ?? [];
+      // The compare API stops at 300 files; past that the list is not the whole change.
+      if (files.length >= 300) throw new Error(`PR #${number} changes too many files to check. A person merges that.`);
+      const bad = files.flatMap((f) => [f.filename, f.previous_filename]).find((f) => f && forbiddenHit(f));
+      if (bad) throw new Error(`PR #${number} changes ${bad} (${forbiddenHit(bad)}). A person merges that.`);
       // Pinned to the commit just read, so a push in between cannot slip into the merge.
-      const res = await fetchFn(`${api}/${number}/merge`, { method: 'PUT', headers, body: JSON.stringify({ merge_method: method, sha: pr.head?.sha, ...(credit ? { commit_message: credit } : {}) }) });
+      const res = await fetchFn(`${api}/${number}/merge`, { method: 'PUT', headers, body: JSON.stringify({ merge_method: method, sha, ...(credit ? { commit_message: credit } : {}) }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(`GitHub refused the merge (${res.status}): ${scrub(data.message ?? 'no message', token)}`);
       return text(`Merged PR #${number} into ${pr.base.ref} (${String(data.sha ?? '').slice(0, 7)}). ${pr.base.ref === 'main' ? 'That is production: it deploys.' : 'It deploys to the preview.'}`);
