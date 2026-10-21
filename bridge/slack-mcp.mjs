@@ -62,7 +62,7 @@ const ctx = {
   // A config that will not load refuses every upload rather than none.
   fence: await loadFence(env.UPLOAD_FENCE),
   // Who may be in a channel that receives a file only the operations team may reach.
-  opsMembers: new Set([...parseList(env.OPS_USERS), env.ALLOWED_USER, botUserId].filter(Boolean)),
+  opsMembers: new Set([...parseList(env.OPS_USERS), ...parseList(env.OPS_BOTS), env.ALLOWED_USER, botUserId].filter(Boolean)),
 };
 
 async function loadFence(path) {

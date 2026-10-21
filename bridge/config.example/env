@@ -39,6 +39,11 @@ TEAM_CHANNELS=
 # fenced like any teammate. In a WhatsApp config, mark a person "ops": true.
 OPS_USERS=
 
+# Optional. Apps (their Slack user ids) allowed in that private channel, such as
+# Linear or a workflow bot. Any member not on OPS_USERS, this list, the operator
+# or the agent itself turns the channel back into an ordinary one.
+OPS_BOTS=
+
 # Optional. The path fence JSON the agent's file tools use. Set it and Slack
 # `upload` and WhatsApp attachments obey it too: a teammate is not sent what
 # their turn may not Read. Unset, teammates are sent no files at all.

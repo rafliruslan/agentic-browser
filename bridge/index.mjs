@@ -435,7 +435,7 @@ async function main() {
     const opsHere =
       role === TEAM &&
       roles.isOps(event.user) &&
-      (await opsPrivate(client, event.channel, { members: new Set([...parseList(OPS_USERS), ALLOWED_USER, botUserId]), requester: event.user }));
+      (await opsPrivate(client, event.channel, { members: new Set([...parseList(OPS_USERS), ...parseList(env.OPS_BOTS), ALLOWED_USER, botUserId]), requester: event.user }));
     const spawnForTurn = (bin, args, opts) =>
       spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, event.user, requesterName, { ops: opsHere }) } });
 

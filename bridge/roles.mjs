@@ -109,10 +109,10 @@ export function createRoles({ operator, teamUsers = '', teamChannels = '', opsUs
 
 /**
  * Whether `channel` is a place only the operations team can read: an IM with `requester`
- * themselves, or a private channel whose every human member is in `members` (ops, the
- * operator, the agent). Apps and bots (Linear, workflow bots) are the company's own
- * integrations, not people, so they do not count; anyone Slack does not confirm as a
- * bot does. Anything else, a failed lookup or a member list too long to finish, is no.
+ * themselves, or a private channel whose every member is in `members`: ops, the operator,
+ * the agent, and the apps listed in OPS_BOTS. An app reads the channel as well as a person
+ * does, so an unlisted one counts against it like anyone else. Anything else, a failed
+ * lookup or a member list too long to finish, is no.
  */
 export async function opsPrivate(client, channel, { members, requester }) {
   try {
@@ -123,11 +123,7 @@ export async function opsPrivate(client, channel, { members, requester }) {
     let cursor;
     for (let page = 0; page < 20; page++) {
       const r = await client.conversations.members({ channel, limit: 200, ...(cursor ? { cursor } : {}) });
-      for (const m of r.members || []) {
-        if (members.has(m)) continue;
-        const u = (await client.users.info({ user: m })).user;
-        if (!u?.is_bot && m !== 'USLACKBOT') return false;
-      }
+      if ((r.members || []).some((m) => !members.has(m))) return false;
       cursor = r.response_metadata?.next_cursor;
       if (!cursor) return true;
     }
