@@ -33,11 +33,14 @@
  * and time). Chat-list previews are used only to notice that something changed.
  */
 
-import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
-import { randomUUID, createHash } from 'node:crypto';
+import { join, dirname, basename, isAbsolute } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { randomUUID, randomBytes, createHash } from 'node:crypto';
+import { safeUploadPath, browserUploadRoot, safeFileName } from './slack-tools.mjs';
 
 export const OPERATOR = 'operator';
 export const TEAM = 'team';
@@ -293,6 +296,49 @@ export function toWhatsApp(text, limit = 3000) {
   return chunks;
 }
 
+/**
+ * The keystrokes that put one chunk in the composer, as `{ text }` (insertText)
+ * and `{ key }` (press). The composer makes its own list from a line that opens
+ * "1. " or "- " and carries it on at the next Shift+Enter: "2. " appears by
+ * itself and "- " shows as a bullet. Typing every marker gives "2. 2. two" and
+ * "- - two". So only a list's first item keeps its marker, and one extra
+ * Shift+Enter leaves the list before the next plain line (so a list, a blank
+ * line and a paragraph take three). Runs inside the page too, so it is
+ * self-contained.
+ */
+export function composerSteps(chunk) {
+  const steps = [];
+  const lines = String(chunk).split('\n');
+  let list = '';
+  for (let i = 0; i < lines.length; i++) {
+    const num = /^\d+\.\s+(.*)$/.exec(lines[i]);
+    const bul = num ? null : /^[-*]\s+(.*)$/.exec(lines[i]);
+    const kind = num ? 'num' : bul ? 'bul' : '';
+    let text = lines[i];
+    if (kind && kind === list) text = (num || bul)[1];
+    else if (list) steps.push({ key: 'Shift+Enter' });
+    list = kind;
+    if (text) steps.push({ text });
+    if (i < lines.length - 1) steps.push({ key: 'Shift+Enter' });
+  }
+  return steps;
+}
+
+/**
+ * A composer's text, or a chunk's, in one comparable line. The composer shows a
+ * "- " item as a bullet "•", and each line is its own paragraph, so compare
+ * line by line with bullets alike and blank lines gone. Runs inside the page.
+ */
+export function normComposer(s) {
+  return String(s)
+    .split('\n')
+    .map((l) => l.trim().replace(/^[•*-]\s+/, '- '))
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 const pad = (n) => String(n).padStart(2, '0');
 const stamp = (d) => (d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : '--:--');
 
@@ -322,6 +368,7 @@ export const WA_NOTE = [
   'Do not cite file names, paths or your notes unless asked.',
   `If the message needs no answer (thanks, ok, an emoji, a reaction), reply with exactly ${NO_REPLY} and nothing else.`,
   'Attachments are not shown to you. If the request depends on one, say so and ask for the text.',
+  'To send a file (a PDF, an image, a sheet), save it first, then put its full path on a line of its own: ATTACH: /full/path/file.pdf. Use the path the tool printed, never a relative one. One line per file, five at most. The bridge checks the file and sends it after your text, so say what it is in the text and never claim a file went unless you wrote that line. A browser export goes in ./artifacts. Only pdf, png, jpg, jpeg, gif, webp, txt, csv, docx, xlsx and pptx go.',
 ].join(' ');
 
 /** The prompt for one chat. The chat text is fenced as data. */
@@ -548,6 +595,8 @@ const chatId = () => page.evaluate(${CHAT_ID_FN});
 const CHUNKS = ${JSON.stringify(chunks)};
 const SELF = ${JSON.stringify(selfName)};
 const DRY = ${dry ? 'true' : 'false'};
+${composerSteps.toString()}
+${normComposer.toString()}
 if (state !== 'ok') { out({ state }); } else {
   await sleep(1500);
   const idx = await page.evaluate((t) => [...document.querySelectorAll('#pane-side [role="row"]')].findIndex((r) => r.querySelector('span[title]')?.getAttribute('title') === t), TITLE);
@@ -564,7 +613,6 @@ if (state !== 'ok') { out({ state }); } else {
         for (const chunk of CHUNKS) {
           const again = ((await page.locator('#main header').first().innerText()) || '').split('\\n')[0].trim();
           if (again !== TITLE || (await chatId()) !== CHAT_ID) { problem = 'chat changed'; break; }
-          const norm = (s) => s.replace(/\\s+/g, ' ').trim();
           // insertText straight after a clear is sometimes dropped, so pause
           // after each step, read the box back, and retry the whole line up.
           let matched = false;
@@ -573,13 +621,12 @@ if (state !== 'ok') { out({ state }); } else {
             await page.keyboard.press('Meta+A');
             await page.keyboard.press('Backspace');
             await sleep(350);
-            const lines = chunk.split('\\n');
-            for (let i = 0; i < lines.length; i++) {
-              if (lines[i]) { await page.keyboard.insertText(lines[i]); await sleep(150); }
-              if (i < lines.length - 1) { await page.keyboard.press('Shift+Enter'); await sleep(100); }
+            for (const step of composerSteps(chunk)) {
+              if (step.text) { await page.keyboard.insertText(step.text); await sleep(150); }
+              else { await page.keyboard.press(step.key); await sleep(100); }
             }
             await sleep(300);
-            matched = norm(await box.innerText()) === norm(chunk);
+            matched = normComposer(await box.innerText()) === normComposer(chunk);
           }
           if (!matched) { problem = 'composer did not match'; break; }
           if (DRY) { sent += 1; continue; }
@@ -611,6 +658,194 @@ if (state !== 'ok') { out({ state }); } else {
         try { await box.click(); await page.keyboard.press('Meta+A'); await page.keyboard.press('Backspace'); await sleep(1200); } catch {}
       }
       out({ state: 'ok', sent, of: CHUNKS.length, problem });
+    }
+  }
+}`;
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+export const MAX_ATTACHMENTS = 5;
+/** WhatsApp takes far more; a report or a screenshot is a few MB. */
+export const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
+
+const PHOTO_EXT = /\.(png|jpe?g|gif|webp)$/i;
+const DOC_EXT = /\.(pdf|txt|csv|docx|xlsx|pptx)$/i;
+
+/** `photo` goes through "Photos & videos", `document` through "Document", null is refused. */
+export function attachmentKind(name) {
+  if (PHOTO_EXT.test(String(name))) return 'photo';
+  if (DOC_EXT.test(String(name))) return 'document';
+  return null;
+}
+
+/**
+ * Pull `ATTACH: /full/path` lines out of the agent's reply. The agent names a file and
+ * the bridge sends it, like the text: the agent never touches WhatsApp. Returns the reply
+ * without those lines and the paths, in order, no repeats. Whatever follows `ATTACH:` is
+ * only a request. `vetAttachment` decides whether the file goes.
+ */
+export function extractAttachments(text) {
+  const paths = [];
+  const kept = [];
+  for (const line of String(text ?? '').replace(/\r\n?/g, '\n').split('\n')) {
+    const m = /^\s*ATTACH:\s*(\S.*?)\s*$/i.exec(line);
+    if (!m) {
+      kept.push(line);
+      continue;
+    }
+    const p = m[1].replace(/^[`'"]+|[`'"]+$/g, '').trim();
+    if (p && !paths.includes(p)) paths.push(p);
+  }
+  return { text: kept.join('\n').replace(/\n{3,}/g, '\n\n').trim(), paths };
+}
+
+/**
+ * Is this file one the bridge may send? `{ path, size, name, kind }` or `{ error }`.
+ *
+ * A file path in a reply is text the agent wrote after reading pages and messages, so it
+ * is treated like any untrusted path: it must be absolute, resolve (after symlinks) inside
+ * the workspace or a temp directory, hold no hidden segment, be a known type under the size
+ * cap. Slack's `upload` has the same fence (`safeUploadPath`).
+ *
+ * Aside lets the agent save a PDF or a screenshot only inside its own session folder, and
+ * the agent has no shell to copy it out, so that folder's `artifacts/` also counts. Not
+ * `tmp/`, where `display()` leaves a picture of whatever page was open. And on every role,
+ * a file from there must have been written since the turn began (`since`): the folder holds
+ * what earlier turns saved, and a teammate's request must not reach those. Slack refuses
+ * the folder to teammates outright; this is the narrower rule that lets Tara answer "send
+ * it as a PDF" in a group.
+ */
+export async function vetAttachment(raw, { roots, sessionsDir = null, since = 0 }) {
+  let p = String(raw ?? '').trim().replace(/^[`'"]+|[`'"]+$/g, '');
+  if (p.startsWith('~/')) p = join(homedir(), p.slice(2));
+  if (!isAbsolute(p)) return { error: `${p || 'an empty path'} is not a full path` };
+  const kind = attachmentKind(p);
+  if (!kind) return { error: `${basename(p)} is not a type I send` };
+  const browserRoot = await browserUploadRoot(p, sessionsDir);
+  if (browserRoot && basename(browserRoot) !== 'artifacts') return { error: `${basename(p)} is not in the browser's artifacts folder` };
+  const safe = await safeUploadPath(p, browserRoot ? [...roots, browserRoot] : roots, { maxBytes: MAX_ATTACH_BYTES });
+  if (safe.error) return { error: safe.error };
+  if (browserRoot && (await stat(safe.path)).mtimeMs < since - 5000) {
+    return { error: `${basename(p)} was saved before this request` };
+  }
+  return { path: safe.path, size: safe.size, name: safeFileName(basename(safe.path)), kind };
+}
+
+/**
+ * Serve vetted files on 127.0.0.1 under a random token, for the page script to fetch. Aside
+ * lets a file chooser read only from the session folder the script runs in, a new one on
+ * every call, and refuses reads of other sessions and /tmp, but allows `fetch` to localhost.
+ * So the script pulls the bytes over loopback into its own `./artifacts`. Only the listed
+ * files, only while this is open.
+ */
+export async function serveFiles(files) {
+  const token = randomBytes(12).toString('hex');
+  const server = createServer((req, res) => {
+    const m = new RegExp(`^/${token}/(\\d+)$`).exec(req.url || '');
+    const f = m && files[Number(m[1])];
+    if (!f) {
+      res.statusCode = 404;
+      return res.end();
+    }
+    res.setHeader('content-type', 'application/octet-stream');
+    res.setHeader('content-length', String(f.size));
+    createReadStream(f.path).on('error', () => res.destroy()).pipe(res);
+  });
+  await new Promise((ok, no) => {
+    server.once('error', no);
+    server.listen(0, '127.0.0.1', ok);
+  });
+  const base = `http://127.0.0.1:${server.address().port}/${token}`;
+  return {
+    urls: files.map((_, i) => `${base}/${i}`),
+    close: () => new Promise((ok) => { server.close(ok); server.closeAllConnections?.(); }),
+  };
+}
+
+/**
+ * Send files into one chat, one message each, after the same checks `sendJs` makes (the
+ * chat found by title, its id equal to the one that was read, both rechecked right before
+ * Send). Per file: fetch it into this session's `./artifacts`, Attach, "Photos & videos" or
+ * "Document", wait for the preview (a PDF takes several seconds to draw; it carries
+ * "Send N selected"), check the preview names the file, click Send, and read the bubble.
+ * `dry` stops at the preview and closes it. `files` is `[{ name, size, kind, url }]`.
+ */
+export const sendFilesJs = (title, files, { dry = false, chatId = '' } = {}) => `${OPEN_JS}
+const TITLE = ${JSON.stringify(title)};
+const CHAT_ID = ${JSON.stringify(chatId)};
+const chatId = () => page.evaluate(${CHAT_ID_FN});
+const FILES = ${JSON.stringify(files)};
+const DRY = ${dry ? 'true' : 'false'};
+if (state !== 'ok') { out({ state }); } else {
+  await sleep(1500);
+  const idx = await page.evaluate((t) => [...document.querySelectorAll('#pane-side [role="row"]')].findIndex((r) => r.querySelector('span[title]')?.getAttribute('title') === t), TITLE);
+  if (idx < 0) { out({ state: 'nochat' }); } else {
+    await page.locator('#pane-side [role="row"]').nth(idx).click();
+    await sleep(2000);
+    const head = async () => ((await page.locator('#main header').first().innerText()) || '').split('\\n')[0].trim();
+    const opened = await chatId();
+    if ((await head()) !== TITLE || !CHAT_ID || opened !== CHAT_ID) { out({ state: 'wrongchat', header: await head(), kind: opened.split('@')[1] || 'unknown' }); } else {
+      // The preview's own Send says "Send 1 selected"; the composer's says just "Send".
+      const sendBtn = page.locator('[aria-label^="Send "]');
+      const alnum = (x) => x.replace(/[^\\p{L}\\p{N}]+/gu, '');
+      let sent = 0;
+      let problem = '';
+      try {
+        for (const f of FILES) {
+          if ((await head()) !== TITLE || (await chatId()) !== CHAT_ID) { problem = 'chat changed'; break; }
+          const res = await fetch(f.url);
+          if (!res.ok) { problem = 'could not read ' + f.name; break; }
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (buf.length !== f.size) { problem = 'staged ' + buf.length + ' bytes, wanted ' + f.size; break; }
+          await fs.mkdir(path.resolve('./artifacts'), { recursive: true });
+          const staged = path.resolve('./artifacts/' + f.name);
+          await fs.writeFile(staged, buf);
+          const before = await page.evaluate(() => [...document.querySelectorAll('#main [data-id]')].map((e) => e.getAttribute('data-id')));
+          await page.locator('#main footer button[aria-label="Attach"]').click();
+          await sleep(900);
+          const item = f.kind === 'photo' ? 'Photos & videos' : 'Document';
+          const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.locator('button[aria-label=' + JSON.stringify(item) + ']').first().click()]);
+          await chooser.setFiles([staged]);
+          let ready = false;
+          for (let i = 0; i < 45 && !ready; i++) { await sleep(1000); ready = (await sendBtn.count()) > 0; }
+          if (!ready) { problem = 'preview did not open'; break; }
+          if (f.kind !== 'photo' && !alnum(await page.evaluate(() => document.body.innerText)).includes(alnum(f.name))) { problem = 'preview does not show ' + f.name; break; }
+          if ((await head()) !== TITLE || (await chatId()) !== CHAT_ID) { problem = 'chat changed'; break; }
+          if (DRY) { sent += 1; continue; }
+          await sendBtn.first().click();
+          // A bubble appears at once, while the file is still uploading, and closing the tab
+          // then loses it ("Something went wrong"). Only a Sent, Delivered or Read label counts.
+          let status = '';
+          for (let i = 0; i < 90 && !status; i++) {
+            await sleep(700);
+            status = await page.evaluate(([old, stem, photo]) => {
+              const row = [...document.querySelectorAll('#main [data-id]')]
+                .filter((e) => !old.includes(e.getAttribute('data-id')))
+                .find((e) => photo ? !!e.querySelector('img') : (e.innerText || '').replace(/[^\\p{L}\\p{N}]+/gu, '').includes(stem));
+              if (!row) return '';
+              const labels = [...row.querySelectorAll('[aria-label]')].map((x) => (x.getAttribute('aria-label') || '').trim());
+              if (labels.some((l) => /something went wrong/i.test(l))) return 'failed';
+              return labels.some((l) => /^(sent|delivered|read)$/i.test(l)) ? 'sent' : '';
+            }, [before, alnum(f.name.replace(/\\.[^.]+$/, '')).slice(0, 20), f.kind === 'photo']);
+          }
+          if (status !== 'sent') { problem = status === 'failed' ? 'upload failed' : 'file not confirmed sent'; break; }
+          sent += 1;
+        }
+      } finally {
+        // A preview left open sends nothing, but close it so the chat is clear for what follows.
+        // Close asks "Discard selection?", and its button is a div, so find it by position and text.
+        try {
+          for (let i = 0; i < 3 && (await sendBtn.count()); i++) {
+            const at = await page.evaluate(() => { const el = [...document.querySelectorAll('[aria-label="Close"]')].find((e) => e.getBoundingClientRect().width > 0); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+            if (at) { await page.mouse.click(at.x, at.y); await sleep(1000); }
+            const discard = page.getByText('Discard', { exact: true });
+            if (await discard.count()) { await discard.first().click({ timeout: 4000 }); await sleep(1200); }
+          }
+        } catch {}
+      }
+      out({ state: 'ok', sent, of: FILES.length, problem, previewLeft: await sendBtn.count() });
     }
   }
 }`;
@@ -710,6 +945,69 @@ async function waTabOpen(account) {
   const probe = `const tabs = await listBrowserTabs(); console.log(${JSON.stringify(SENTINEL)} + JSON.stringify({ state: 'ok', n: tabs.filter((t) => /web\\.whatsapp\\.com/.test(t.url || '')).length }));`;
   const r = await runRepl(account, probe, { timeoutMs: 60_000 });
   return r.state === 'ok' ? r.n > 0 : false;
+}
+
+/** The browser's sessions folder, from the env file or the account id (`u3` -> ~/.aside/u/3/sessions). */
+export function sessionsDirFor(config, env = {}) {
+  const set = String(env.UPLOAD_BROWSER_SESSIONS || '').trim();
+  if (set) return set.startsWith('~/') ? join(homedir(), set.slice(2)) : set;
+  const n = /^u(\d+)$/.exec(config.account || '');
+  return n ? join(homedir(), '.aside', 'u', n[1], 'sessions') : null;
+}
+
+/**
+ * Put a reply in the chat: its text first, then each file it names with `ATTACH:`, one
+ * message per file. A file that fails the vetting or the send is said so in the chat, so
+ * nobody waits for it, and the caller tells the operator. `run` runs a script in Aside.
+ * `{ ok, detail }`: detail is one line for the log and the operator.
+ */
+export async function deliverReply({ reply, title, chatId, config, since = Date.now(), boss = '', sessionsDir = null, roots = [WORKSPACE, '/tmp', tmpdir()], run = runRepl }) {
+  const { text, paths } = extractAttachments(reply);
+  const files = [];
+  const rejects = [];
+  for (const raw of paths) {
+    if (files.length >= MAX_ATTACHMENTS) {
+      rejects.push(`${basename(raw)}: more than ${MAX_ATTACHMENTS} files`);
+      continue;
+    }
+    const v = await vetAttachment(raw, { roots, sessionsDir, since });
+    if (v.error) rejects.push(v.error);
+    else files.push(v);
+  }
+  const told = boss ? `${boss} has been told.` : 'The team has been told.';
+  const say = async (line) => run(config.account, sendJs(title, toWhatsApp(line), config.selfName, { chatId }));
+
+  const body = rejects.length ? `${text}${text ? '\n\n' : ''}Sorry, I could not attach ${rejects.length > 1 ? 'some files' : 'a file'}. ${told}` : text;
+  const chunks = toWhatsApp(body);
+  let sent = { state: 'skipped' };
+  if (chunks.length) sent = await run(config.account, sendJs(title, chunks, config.selfName, { chatId }));
+  const textOk = !chunks.length || (sent.state === 'ok' && sent.sent === sent.of && !sent.problem);
+
+  const result = { sent: 0, of: files.length, problems: [] };
+  if (textOk && files.length) {
+    const server = await serveFiles(files);
+    try {
+      // One call per file: a script has 120 s, and a PDF preview alone can take a minute.
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const r = await run(config.account, sendFilesJs(title, [{ name: f.name, size: f.size, kind: f.kind, url: server.urls[i] }], { chatId }), { timeoutMs: 170_000 });
+        if (r.state === 'ok' && r.sent === 1 && !r.problem) result.sent += 1;
+        else {
+          result.problems.push(`${f.name}: ${r.problem || r.state}${r.error ? ` ${r.error}` : ''}`.slice(0, 160));
+          // Say so in the chat only when the page answered and nothing went: an unknown state may have sent it.
+          if (r.state === 'ok') await say(`Sorry, I could not send ${f.name}. ${told}`);
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  }
+  const ok = textOk && result.sent === files.length && !rejects.length;
+  const detail = [
+    chunks.length ? `text ${textOk ? 'ok' : JSON.stringify(sent).slice(0, 120)}` : '',
+    paths.length ? `files ${result.sent}/${paths.length}${rejects.length ? `, refused: ${rejects.join('; ')}` : ''}${result.problems.length ? `, failed: ${result.problems.join('; ')}` : ''}${!textOk && files.length ? ', not tried (text failed)' : ''}` : '',
+  ].filter(Boolean).join('; ') || 'nothing to send';
+  return { ok, detail };
 }
 
 export async function runAgentTurn({ prompt, who }) {
@@ -921,25 +1219,22 @@ async function handle({ c, config, state, env }) {
     await reactAs('done');
     return done({ handled: hash });
   }
+  const boss = [...config.people.values()].find((p) => p.role === OPERATOR)?.name;
   if (failed) {
-    const boss = [...config.people.values()].find((p) => p.role === OPERATOR)?.name;
     reply = q.person.role === TEAM ? `Sorry, I hit an error on that one. ${boss ? `${boss} has` : 'The team has'} been told.` : '';
   }
-  const chunks = toWhatsApp(reply);
-  let sent = { state: 'skipped' };
-  if (chunks.length) sent = await runRepl(config.account, sendJs(title, chunks, config.selfName, { chatId: read.chatId }));
-
-  const sentOk = sent.state === 'ok' && sent.sent === sent.of && !sent.problem;
+  const delivery = await deliverReply({ reply, title, chatId: read.chatId, config, since: started, boss, sessionsDir: sessionsDirFor(config, env) });
+  const sentOk = delivery.ok;
   done({ handled: hash });
   await reactAs(failed || !sentOk ? 'failed' : 'done');
-  log(`"${title}": ${failed ? 'agent failed' : 'answered'} in ${secs}s, send ${sentOk ? 'ok' : JSON.stringify(sent)}`);
+  log(`"${title}": ${failed ? 'agent failed' : 'answered'} in ${secs}s, send ${sentOk ? 'ok' : delivery.detail}`);
 
   const excerpt = request.map((m) => m.text).join(' ').replace(/\s+/g, ' ').slice(0, 70);
   if (failed || !sentOk) {
     await notifyOperator(
       config,
       env,
-      `WhatsApp: ${failed ? 'the agent failed' : 'the reply did not send'} for ${q.person.name} ("${excerpt}"). ${failed ? (result.text || '').slice(0, 120) : JSON.stringify(sent).slice(0, 160)}`,
+      `WhatsApp: ${failed ? 'the agent failed' : 'the reply did not send'} for ${q.person.name} ("${excerpt}"). ${failed ? (result.text || '').slice(0, 120) : delivery.detail.slice(0, 300)}`,
     );
   } else if (config.notify === 'all') {
     await notifyOperator(config, env, `WhatsApp: answered ${q.person.name} (${q.person.role}) in ${c.kind === 'group' ? `"${title}"` : 'a DM'}. They asked: "${excerpt}". ${secs}s.`);

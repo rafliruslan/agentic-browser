@@ -4,9 +4,14 @@ import {
   parseConfig, unreadCount, rowSignature, pickCandidates, parsePre, parseMessages,
   unansweredTail, isGenuineDm, provenSender, unprovenAsks, qualifying, isFresh, tailHash, underBudget, toWhatsApp,
   buildPrompt, runRepl, SCAN_JS, readJs, sendJs, reactJs, candidateFor, REACTIONS, OPERATOR, TEAM, isNoReply,
+  composerSteps, normComposer, extractAttachments, attachmentKind, vetAttachment, serveFiles, sendFilesJs, deliverReply, sessionsDirFor,
+  MAX_ATTACHMENTS,
 } from './whatsapp.mjs';
 import { EventEmitter } from 'node:events';
 import vm from 'node:vm';
+import { mkdtemp, mkdir, writeFile, utimes, symlink, truncate, rm, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const SELF = 'A1C/0Spike Official';
 const config = parseConfig({
@@ -372,6 +377,272 @@ test('browser scripts embed their inputs as JSON and carry the safety checks', (
   assert.ok(SCAN_JS.includes('unread message'));
   // none of the scripts presses Enter to send
   assert.ok(!/press\('Enter'\)/.test(send));
+});
+
+const typed = (steps) => steps.map((x) => (x.text !== undefined ? x.text : '<SE>')).join('');
+
+test('composerSteps types only the first marker of a list', () => {
+  // The composer numbers a list by itself, so typing "2. " again gives "2. 2. ".
+  assert.equal(typed(composerSteps('1. one\n2. two\n3. three')), '1. one<SE>two<SE>three');
+  assert.equal(typed(composerSteps('- a\n- b')), '- a<SE>b');
+  assert.equal(typed(composerSteps('* a\n* b')), '* a<SE>b');
+  assert.equal(typed(composerSteps('plain\nlines')), 'plain<SE>lines');
+  assert.equal(typed(composerSteps('*bold* line\n-5 is not a bullet')), '*bold* line<SE>-5 is not a bullet');
+});
+
+test('composerSteps takes one extra Shift+Enter to leave a list', () => {
+  // list, blank line, paragraph: three presses, not the usual two
+  assert.equal(typed(composerSteps('1. a\n2. b\n\nAfter')), '1. a<SE>b<SE><SE><SE>After');
+  assert.equal(typed(composerSteps('- a\nAfter')), '- a<SE><SE>After');
+  // a list at the very end leaves no trailing marker behind
+  assert.equal(typed(composerSteps('Intro\n- a\n- b')), 'Intro<SE>- a<SE>b');
+  // a new list after a paragraph starts again with its marker
+  assert.equal(typed(composerSteps('1. a\n\n1. b')), '1. a<SE><SE><SE>1. b');
+  assert.deepEqual(composerSteps(''), []);
+});
+
+test('composerSteps: the reply that failed on 2026-10-20 now types without a doubled number', () => {
+  const reply = 'Robin, the steps are below.\n\n*Level 1 onboarding (15% seller)*\n1. Sign up.\n2. Wait for approval.\n3. Log in.\n\nPayout days are still to be confirmed.';
+  const t = typed(composerSteps(reply));
+  assert.ok(t.includes('1. Sign up.<SE>Wait for approval.<SE>Log in.<SE><SE><SE>Payout days'));
+  assert.ok(!/2\. Wait|3\. Log/.test(t));
+});
+
+test('normComposer: the composer reads back as the chunk it was given', () => {
+  // as WhatsApp shows them: auto-numbered text, "•" for "- ", a paragraph per line
+  const chunk = 'Intro 💗\n\n*Head*\n1. one\n2. two\n\n- b1\n- b2\n\nEnd?';
+  const box = 'Intro 💗\n\n\n\n\n*Head*\n\n1. one\n\n2. two\n\n\n\n\n• b1\n\n• b2\n\n\n\n\nEnd?';
+  assert.equal(normComposer(box), normComposer(chunk));
+  // a doubled number or a changed word still fails
+  assert.notEqual(normComposer('1. one\n\n2. 2. two'), normComposer('1. one\n2. two'));
+  assert.notEqual(normComposer('• a'), normComposer('a'));
+  assert.notEqual(normComposer('hello'), normComposer('hellp'));
+  assert.equal(normComposer('*bold* word'), '*bold* word');
+});
+
+test('the send script carries the list-aware typing and compare', () => {
+  const send = sendJs('T', ['1. a\n2. b'], SELF);
+  assert.ok(send.includes('function composerSteps'));
+  assert.ok(send.includes('function normComposer'));
+  assert.ok(send.includes('normComposer(await box.innerText()) === normComposer(chunk)'));
+});
+
+test('extractAttachments lifts ATTACH lines out of the reply', () => {
+  const r = extractAttachments('Here is the guide.\nATTACH: /w/a.pdf\n\nATTACH: `/w/b.png`\nattach: /w/a.pdf\nDone?');
+  assert.deepEqual(r.paths, ['/w/a.pdf', '/w/b.png']);
+  assert.equal(r.text, 'Here is the guide.\n\nDone?');
+  assert.deepEqual(extractAttachments('ATTACH: /x/y.pdf'), { text: '', paths: ['/x/y.pdf'] });
+  assert.deepEqual(extractAttachments('no files here'), { text: 'no files here', paths: [] });
+  // only a line that opens with the word counts
+  assert.deepEqual(extractAttachments('I will ATTACH: /x/y.pdf later').paths, []);
+  assert.deepEqual(extractAttachments(undefined), { text: '', paths: [] });
+});
+
+test('attachmentKind: photos, documents, and nothing else', () => {
+  assert.equal(attachmentKind('/a/b.PNG'), 'photo');
+  assert.equal(attachmentKind('x.jpeg'), 'photo');
+  assert.equal(attachmentKind('/a/report.pdf'), 'document');
+  assert.equal(attachmentKind('/a/sheet.xlsx'), 'document');
+  assert.equal(attachmentKind('/a/run.sh'), null);
+  assert.equal(attachmentKind('/a/key.pem'), null);
+  assert.equal(attachmentKind('/a/noext'), null);
+  assert.equal(attachmentKind('/a/x.pdf.exe'), null);
+});
+
+async function attachFixture() {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'wa-attach-')));
+  const work = join(base, 'workspace');
+  const sessions = join(base, 'sessions');
+  const sid = join(sessions, '2026-10-20_AbC123');
+  await mkdir(work, { recursive: true });
+  await mkdir(join(sid, 'artifacts'), { recursive: true });
+  await mkdir(join(sid, 'tmp'), { recursive: true });
+  const f = {
+    base, work, sessions,
+    doc: join(work, 'plan.pdf'),
+    fresh: join(sid, 'artifacts', 'guide.pdf'),
+    old: join(sid, 'artifacts', 'older.pdf'),
+    shot: join(sid, 'tmp', 'page.png'),
+    secret: join(base, 'secret.pdf'),
+    hidden: join(work, '.hidden', 'x.pdf'),
+  };
+  await mkdir(join(work, '.hidden'), { recursive: true });
+  for (const p of [f.doc, f.fresh, f.old, f.shot, f.secret, f.hidden]) await writeFile(p, 'x'.repeat(100));
+  const past = new Date(Date.now() - 3_600_000);
+  await utimes(f.old, past, past);
+  return f;
+}
+
+test('vetAttachment lets through workspace files and this turn\'s browser exports, and nothing else', async () => {
+  const f = await attachFixture();
+  try {
+    const opts = { roots: [f.work], sessionsDir: f.sessions, since: Date.now() - 60_000 };
+    const ok = await vetAttachment(f.doc, opts);
+    assert.deepEqual([ok.path, ok.size, ok.name, ok.kind], [f.doc, 100, 'plan.pdf', 'document']);
+    assert.equal((await vetAttachment(f.fresh, opts)).name, 'guide.pdf');
+    // a browser file saved before the turn began is an earlier turn's, and refused
+    assert.match((await vetAttachment(f.old, opts)).error, /before this request/);
+    // the browser's tmp folder holds screenshots of whatever was open
+    assert.match((await vetAttachment(f.shot, opts)).error, /artifacts/);
+    // outside every root, hidden, relative, wrong type, missing
+    assert.match((await vetAttachment(f.secret, opts)).error, /outside/);
+    assert.match((await vetAttachment(f.hidden, opts)).error, /hidden/);
+    assert.match((await vetAttachment('./artifacts/guide.pdf', opts)).error, /full path/);
+    assert.match((await vetAttachment(join(f.work, 'run.sh'), opts)).error, /not a type/);
+    assert.match((await vetAttachment(join(f.work, 'gone.pdf'), opts)).error, /No such file/);
+    // a link inside the workspace that points out of it is judged by where it lands
+    await symlink(f.secret, join(f.work, 'link.pdf'));
+    assert.match((await vetAttachment(join(f.work, 'link.pdf'), opts)).error, /outside/);
+    // with no sessions folder configured, browser files are not reachable at all
+    assert.match((await vetAttachment(f.fresh, { ...opts, sessionsDir: null })).error, /outside/);
+    // over the size cap
+    const big = join(f.work, 'big.pdf');
+    await writeFile(big, '');
+    await truncate(big, 26 * 1024 * 1024);
+    assert.match((await vetAttachment(big, opts)).error, /limit/);
+  } finally {
+    await rm(f.base, { recursive: true, force: true });
+  }
+});
+
+test('serveFiles hands each listed file to a loopback fetch and nothing else', async () => {
+  const f = await attachFixture();
+  try {
+    await writeFile(f.doc, 'hello pdf');
+    const server = await serveFiles([{ path: f.doc, size: 9 }]);
+    assert.match(server.urls[0], /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{24}\/0$/);
+    const res = await fetch(server.urls[0]);
+    assert.equal(await res.text(), 'hello pdf');
+    assert.equal((await fetch(server.urls[0].replace(/\/0$/, '/1'))).status, 404);
+    assert.equal((await fetch(server.urls[0].replace(/\/[0-9a-f]{24}\//, '/' + '0'.repeat(24) + '/'))).status, 404);
+    await server.close();
+    await assert.rejects(fetch(server.urls[0]));
+  } finally {
+    await rm(f.base, { recursive: true, force: true });
+  }
+});
+
+test('sendFilesJs is valid, checks the chat twice, and clicks the preview\'s own Send', () => {
+  const file = { name: 'a "b".pdf', size: 9, kind: 'document', url: 'http://127.0.0.1:1/t/0' };
+  const code = sendFilesJs('T "q"', [file], { chatId: 'a"b@g.us' });
+  assert.doesNotThrow(() => new vm.Script(`(async () => {${code}})`));
+  assert.ok(code.includes(JSON.stringify(file.name)));
+  assert.ok(code.includes('const CHAT_ID = "a\\"b@g.us";'));
+  assert.ok(code.includes('opened !== CHAT_ID'));
+  assert.ok(code.includes('[aria-label^="Send "]'), 'the preview\'s Send is "Send 1 selected"; the composer\'s plain Send must not match');
+  assert.ok(code.includes('file not confirmed sent') && code.includes('upload failed'));
+  assert.ok(/Sent, Delivered or Read/.test(code), 'a bubble alone is not proof: the upload can still fail');
+  assert.ok(sendFilesJs('T', [file], { dry: true }).includes('const DRY = true;'));
+  assert.ok(sendFilesJs('T', [file]).includes('const CHAT_ID = "";'), 'no id given: nothing matches');
+  assert.ok(!/press\('Enter'\)/.test(code));
+});
+
+test('sessionsDirFor: the env value, or the account id', () => {
+  assert.equal(sessionsDirFor({ account: 'u3' }, { UPLOAD_BROWSER_SESSIONS: '/s/dir' }), '/s/dir');
+  assert.match(sessionsDirFor({ account: 'u3' }, {}), /\.aside\/u\/3\/sessions$/);
+  assert.match(sessionsDirFor({ account: 'x' }, { UPLOAD_BROWSER_SESSIONS: '~/a/b' }), /\/a\/b$/);
+  assert.equal(sessionsDirFor({ account: 'work' }, {}), null);
+});
+
+// A stand-in for `aside repl`: answers by which script it was handed, and records what ran.
+function fakeRun({ text = {}, file = [] } = {}) {
+  const calls = [];
+  let fileCall = 0;
+  const run = async (_account, code) => {
+    if (code.includes('const FILES')) {
+      calls.push({ kind: 'file', code });
+      const r = file[fileCall++] ?? { state: 'ok', sent: 1, of: 1, problem: '' };
+      return r;
+    }
+    const chunks = JSON.parse(/const CHUNKS = (.*);/.exec(code)[1]);
+    calls.push({ kind: 'text', chunks });
+    return { state: 'ok', sent: chunks.length, of: chunks.length, problem: '', ...text };
+  };
+  return { run, calls };
+}
+
+test('deliverReply: text first, then the file, and the file is served to the page', async () => {
+  const f = await attachFixture();
+  try {
+    const fake = fakeRun();
+    const out = await deliverReply({ reply: `Here is the guide.\nATTACH: ${f.fresh}`, title: 'G', chatId: 'g@g.us', config, since: Date.now() - 60_000, boss: 'Robin', sessionsDir: f.sessions, roots: [f.work], run: fake.run });
+    assert.equal(out.ok, true);
+    assert.deepEqual(fake.calls.map((c) => c.kind), ['text', 'file']);
+    assert.deepEqual(fake.calls[0].chunks, ['Here is the guide.']);
+    assert.match(fake.calls[1].code, /"name":"guide.pdf","size":100,"kind":"document","url":"http:\/\/127\.0\.0\.1:/);
+    assert.match(out.detail, /files 1\/1/);
+  } finally {
+    await rm(f.base, { recursive: true, force: true });
+  }
+});
+
+test('deliverReply: a refused file is said so in the chat, and the run is not ok', async () => {
+  const f = await attachFixture();
+  try {
+    const fake = fakeRun();
+    const out = await deliverReply({ reply: `Sent.\nATTACH: ${f.secret}\nATTACH: ${f.doc}`, title: 'G', chatId: 'g@g.us', config, since: 0, boss: 'Robin', sessionsDir: f.sessions, roots: [f.work], run: fake.run });
+    assert.equal(out.ok, false);
+    assert.match(fake.calls[0].chunks[0], /^Sent\.\n\nSorry, I could not attach a file\. Robin has been told\.$/);
+    assert.equal(fake.calls.filter((c) => c.kind === 'file').length, 1, 'the good file still goes');
+    assert.match(out.detail, /refused: .*outside/);
+  } finally {
+    await rm(f.base, { recursive: true, force: true });
+  }
+});
+
+test('deliverReply: a failed file says so once, and a text failure sends no file', async () => {
+  const f = await attachFixture();
+  try {
+    const bad = fakeRun({ file: [{ state: 'ok', sent: 0, of: 1, problem: 'preview did not open' }] });
+    const out = await deliverReply({ reply: `Hi.\nATTACH: ${f.doc}`, title: 'G', chatId: 'g@g.us', config, boss: 'Robin', roots: [f.work], run: bad.run });
+    assert.equal(out.ok, false);
+    assert.deepEqual(bad.calls.map((c) => c.kind), ['text', 'file', 'text']);
+    assert.deepEqual(bad.calls[2].chunks, ['Sorry, I could not send plan.pdf. Robin has been told.']);
+    assert.match(out.detail, /plan\.pdf: preview did not open/);
+
+    // the page never answered: the file may have gone, so nothing is claimed in the chat
+    const lost = fakeRun({ file: [{ state: 'error', error: 'timeout' }] });
+    const out2 = await deliverReply({ reply: `Hi.\nATTACH: ${f.doc}`, title: 'G', chatId: 'g@g.us', config, roots: [f.work], run: lost.run });
+    assert.equal(out2.ok, false);
+    assert.deepEqual(lost.calls.map((c) => c.kind), ['text', 'file']);
+
+    const noText = fakeRun({ text: { sent: 0, problem: 'composer did not match' } });
+    const out3 = await deliverReply({ reply: `Hi.\nATTACH: ${f.doc}`, title: 'G', chatId: 'g@g.us', config, roots: [f.work], run: noText.run });
+    assert.equal(out3.ok, false);
+    assert.deepEqual(noText.calls.map((c) => c.kind), ['text']);
+    assert.match(out3.detail, /not tried/);
+  } finally {
+    await rm(f.base, { recursive: true, force: true });
+  }
+});
+
+test('deliverReply: a file with no text sends no text, and a plain reply is unchanged', async () => {
+  const f = await attachFixture();
+  try {
+    const only = fakeRun();
+    const out = await deliverReply({ reply: `ATTACH: ${f.doc}`, title: 'G', chatId: 'g@g.us', config, roots: [f.work], run: only.run });
+    assert.equal(out.ok, true);
+    assert.deepEqual(only.calls.map((c) => c.kind), ['file']);
+    const plain = fakeRun();
+    const out2 = await deliverReply({ reply: 'Just text.', title: 'G', chatId: 'g@g.us', config, run: plain.run });
+    assert.equal(out2.ok, true);
+    assert.deepEqual(plain.calls.map((c) => c.kind), ['text']);
+    // more files than the cap: the rest are refused
+    const many = fakeRun();
+    const lines = Array.from({ length: MAX_ATTACHMENTS + 1 }, (_, i) => `ATTACH: ${f.doc.replace('plan', 'p' + i)}`);
+    for (let i = 0; i <= MAX_ATTACHMENTS; i++) await writeFile(f.doc.replace('plan', 'p' + i), 'x');
+    const out3 = await deliverReply({ reply: lines.join('\n'), title: 'G', chatId: 'g@g.us', config, roots: [f.work], run: many.run });
+    assert.equal(many.calls.filter((c) => c.kind === 'file').length, MAX_ATTACHMENTS);
+    assert.equal(out3.ok, false);
+  } finally {
+    await rm(f.base, { recursive: true, force: true });
+  }
+});
+
+test('the prompt tells the agent how to send a file', () => {
+  const p = buildPrompt({ who: config.people.get('Dana Hart'), kind: 'dm', title: 't', request: [m('x', 'y')], context: [] });
+  assert.match(p, /ATTACH: \/full\/path\/file\.pdf/);
+  assert.match(p, /never claim a file went/);
 });
 
 test('generated browser scripts are valid JavaScript', async () => {
