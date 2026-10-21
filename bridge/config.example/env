@@ -32,6 +32,16 @@ TEAM_USERS=
 # Nothing listed means no teammate is served anywhere.
 TEAM_CHANNELS=
 
+# Optional. Teammates in the operations team (Slack user ids, comma-separated).
+# They reach the path fence's `opsAllow` paths, which teamDeny keeps from the rest.
+# In a WhatsApp config, mark a person "ops": true instead.
+OPS_USERS=
+
+# Optional. The path fence JSON the agent's file tools use. Set it and Slack
+# `upload` and WhatsApp attachments obey it too: a teammate is not sent what
+# their turn may not Read. Unset, teammates are sent no files at all.
+UPLOAD_FENCE=
+
 # Optional. A .zip fetched with the `file` tool is unpacked under the strict
 # profile: lower size caps, and no programs, scripts, installers or hidden files.
 # 0 turns the strict profile off. Say so only for an agent you trust with

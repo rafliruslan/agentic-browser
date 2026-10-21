@@ -185,7 +185,7 @@ function toLegacyResult(r) {
 
 async function main() {
   const env = await loadEnv();
-  const { SLACK_BOT_TOKEN, SLACK_APP_TOKEN, ALLOWED_USER, ALLOWED_CHANNEL, MAX_CONCURRENT, TEAM_USERS, TEAM_CHANNELS } = env;
+  const { SLACK_BOT_TOKEN, SLACK_APP_TOKEN, ALLOWED_USER, ALLOWED_CHANNEL, MAX_CONCURRENT, TEAM_USERS, TEAM_CHANNELS, OPS_USERS } = env;
 
   const concurrency = Number.parseInt(MAX_CONCURRENT, 10) > 0
     ? Number.parseInt(MAX_CONCURRENT, 10)
@@ -198,7 +198,7 @@ async function main() {
     throw new Error(`ALLOWED_USER must be set in ${ENV_PATH}; it is the only access control`);
   }
   // The operator, plus optional teammates in listed channels only. See roles.mjs.
-  const roles = createRoles({ operator: ALLOWED_USER, teamUsers: TEAM_USERS, teamChannels: TEAM_CHANNELS });
+  const roles = createRoles({ operator: ALLOWED_USER, teamUsers: TEAM_USERS, teamChannels: TEAM_CHANNELS, opsUsers: OPS_USERS });
 
   // Under TEAM_CHANNELS=*, a teammate's role depends on whether the
   // conversation is a channel or a (group) DM. A message event says so in
@@ -432,7 +432,7 @@ async function main() {
       }
     }
     const spawnForTurn = (bin, args, opts) =>
-      spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, event.user, requesterName) } });
+      spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, event.user, requesterName, { ops: roles.isOps(event.user) }) } });
 
     await queue.add(threadTs, async () => {
       let ok = false;

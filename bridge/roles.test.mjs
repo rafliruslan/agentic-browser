@@ -128,3 +128,15 @@ test('gateUserFor lets an admitted teammate through the single-user gates and no
   assert.equal(gateUserFor(roles, { user: 'U_A', channel: 'C_OTHER' }, OP), OP);
   assert.notEqual(gateUserFor(roles, { user: 'U_X', channel: 'C1' }, OP), 'U_X');
 });
+
+test('ops is a subset of the team: only a listed teammate is ops, and only then is it passed on', () => {
+  const r = createRoles({ operator: 'UOP', teamUsers: 'U1,U2', teamChannels: '*', opsUsers: 'U1,U9,UOP' });
+  assert.equal(r.isOps('U1'), true);
+  assert.equal(r.isOps('U2'), false);
+  // Not a teammate, so not ops either, and the operator is never ops.
+  assert.equal(r.isOps('U9'), false);
+  assert.equal(r.isOps('UOP'), false);
+  assert.equal(requesterEnv(TEAM, 'U1', 'A', { ops: true }).AGENT_REQUESTER_OPS, '1');
+  assert.equal(requesterEnv(TEAM, 'U2', 'B').AGENT_REQUESTER_OPS, undefined);
+  assert.deepEqual(requesterEnv(OPERATOR, 'UOP', '', { ops: true }), {});
+});

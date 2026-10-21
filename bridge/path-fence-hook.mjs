@@ -19,6 +19,8 @@
  *   denyTools        tool names blocked outright, such as Bash
  *   grepExclude      globs added to every Grep, so a search cannot print lines out of a
  *                    secrets file that a Read would have refused
+ *   teamDeny         refused on a teammate's turn
+ *   opsAllow         inside teamDeny, but open to a teammate in the operations team
  *
  * Compared lowercase and after realpath: macOS volumes are case-insensitive by
  * default, and a symlink must not carry a path out of its root.
@@ -52,7 +54,32 @@ export function real(p) {
 const inside = (p, root) => p === root || p.startsWith(`${root}/`);
 
 /** True when the bridge says a teammate, not the operator, asked for this turn. */
-const isTeamTurn = () => process.env.AGENT_REQUESTER_ROLE === 'team';
+const isTeamTurn = (env = process.env) => env.AGENT_REQUESTER_ROLE === 'team';
+
+/**
+ * Why a teammate may not reach `p` (already through `real`), or null. Inside teamDeny is
+ * refused unless the teammate is in the operations team and `p` is also inside opsAllow.
+ * `opened` says the ops exception is what let it through.
+ */
+export function teamDenial(p, cfg, env = process.env) {
+  if (!isTeamTurn(env) || !cfg.teamDeny.some((d) => inside(p, d))) return { reason: null, opened: false };
+  if (env.AGENT_REQUESTER_OPS === '1' && (cfg.opsAllow || []).some((a) => inside(p, a))) return { reason: null, opened: true };
+  return { reason: 'is not available for requests from teammates. Ask Rafli.', opened: false };
+}
+
+/**
+ * The same rules for a file about to be sent out (Slack upload, WhatsApp attachment):
+ * a secrets-looking name is refused on every turn, teamDeny on a teammate's. Sending is
+ * reading by other means, so the fence that guards Read must guard it too.
+ * `{ reason, opsOnly }`: opsOnly means only the ops exception let it through, so the
+ * caller should keep it out of places the rest of the team can see.
+ */
+export function sendRefusal(path, cfg, env = process.env) {
+  const p = real(path);
+  if (cfg.denyNames.some((r) => r.test(basename(p)))) return { reason: 'looks like a secrets file.', opsOnly: false };
+  const t = teamDenial(p, cfg, env);
+  return { reason: t.reason, opsOnly: t.opened };
+}
 
 export function loadConfig(text) {
   const c = JSON.parse(text);
@@ -69,6 +96,8 @@ export function loadConfig(text) {
     // Refused only on a teammate's turn (AGENT_REQUESTER_ROLE=team, set by the
     // bridge). Unset means the operator, so nothing changes for him.
     teamDeny: list('teamDeny'),
+    // The part of teamDeny the operations team may still reach (AGENT_REQUESTER_OPS=1).
+    opsAllow: list('opsAllow'),
     teamGrepExclude: c.teamGrepExclude || [],
   };
 }
@@ -121,9 +150,8 @@ export function check(event, cfg) {
     const p = real(raw);
     const shown = raw.length > 80 ? `${raw.slice(0, 77)}...` : raw;
     if (cfg.denyNames.some((r) => r.test(basename(p)))) return `${shown} looks like a secrets file.`;
-    if (isTeamTurn() && cfg.teamDeny.some((d) => inside(p, d))) {
-      return `${shown} is not available for requests from teammates. Ask Rafli.`;
-    }
+    const team = teamDenial(p, cfg);
+    if (team.reason) return `${shown} ${team.reason}`;
     const denied = cfg.deny.some((d) => inside(p, d));
     if (denied && (write || !cfg.allowInsideDeny.some((a) => inside(p, a)))) {
       return `${shown} is outside what this agent may access.`;

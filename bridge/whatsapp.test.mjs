@@ -4,12 +4,13 @@ import {
   parseConfig, unreadCount, rowSignature, pickCandidates, parsePre, parseMessages,
   unansweredTail, isGenuineDm, provenSender, unprovenAsks, qualifying, isFresh, tailHash, underBudget, toWhatsApp,
   buildPrompt, runRepl, SCAN_JS, readJs, sendJs, reactJs, candidateFor, REACTIONS, OPERATOR, TEAM, isNoReply,
-  composerSteps, normComposer, extractAttachments, attachmentKind, vetAttachment, serveFiles, sendFilesJs, deliverReply, sessionsDirFor,
+  composerSteps, normComposer, extractAttachments, attachmentKind, vetAttachment, serveFiles, sendFilesJs, deliverReply, sessionsDirFor, turnEnvFor,
   MAX_ATTACHMENTS,
 } from './whatsapp.mjs';
 import { EventEmitter } from 'node:events';
 import vm from 'node:vm';
 import { mkdtemp, mkdir, writeFile, utimes, symlink, truncate, rm, realpath } from 'node:fs/promises';
+import { loadConfig as loadFence } from './path-fence-hook.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -691,4 +692,34 @@ test('runRepl reports bad JSON without throwing', async () => {
 test('runRepl kills a hung script', async () => {
   const r = await runRepl('u3', 'x', { spawnFn: fakeSpawn('', { hang: true }), timeoutMs: 20 });
   assert.equal(r.state, 'error');
+});
+
+test('attachments obey the path fence: teammates are refused barred files, ops get them only outside groups', async () => {
+  const f = await attachFixture();
+  try {
+    const barred = join(f.work, 'routines', 'payouts.pdf');
+    await mkdir(join(f.work, 'routines'), { recursive: true });
+    await writeFile(barred, 'x');
+    const fence = loadFence(JSON.stringify({ teamDeny: [join(f.work, 'routines')], opsAllow: [barred] }));
+    const team = turnEnvFor({ role: TEAM, label: 'Dana Hart', name: 'Dana' });
+    const ops = turnEnvFor({ role: TEAM, label: 'Robin', name: 'Robin', ops: true });
+    const vet = (p, turnEnv, group, fz = fence) => vetAttachment(p, { roots: [f.work], fence: fz, turnEnv, group });
+    assert.equal(ops.AGENT_REQUESTER_OPS, '1');
+    assert.equal(team.AGENT_REQUESTER_OPS, undefined);
+    assert.deepEqual(turnEnvFor({ role: OPERATOR, label: 'x', ops: true }), {});
+    assert.ok((await vet(barred, {}, true)).path, 'operator');
+    assert.ok((await vet(f.doc, team, true)).path, 'a plain file for a teammate');
+    assert.match((await vet(barred, team, false)).error, /not available/);
+    assert.ok((await vet(barred, ops, false)).path);
+    assert.match((await vet(barred, ops, true)).error, /operations team only/);
+    assert.match((await vet(f.doc, team, false, null)).error, /need the path fence/);
+    assert.ok((await vet(f.doc, {}, false, null)).path);
+  } finally {
+    await rm(f.base, { recursive: true, force: true });
+  }
+});
+
+test('ops in the WhatsApp config is a teammate flag, never the operator\'s', () => {
+  const c = parseConfig({ people: { A: { name: 'A', ops: true }, B: { name: 'B' }, C: { name: 'C', role: 'operator', ops: true }, D: { name: 'D', ops: 'yes' } } });
+  assert.deepEqual(['A', 'B', 'C', 'D'].map((k) => c.people.get(k).ops), [true, false, false, false]);
 });

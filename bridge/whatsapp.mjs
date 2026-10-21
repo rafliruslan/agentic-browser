@@ -41,6 +41,7 @@ import { join, dirname, basename, isAbsolute } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { safeUploadPath, browserUploadRoot, safeFileName } from './slack-tools.mjs';
+import { loadConfig as loadFenceConfig, sendRefusal } from './path-fence-hook.mjs';
 
 export const OPERATOR = 'operator';
 export const TEAM = 'team';
@@ -66,6 +67,8 @@ export function parseConfig(raw = {}) {
       label,
       name: String(p?.name || label),
       role: p?.role === OPERATOR ? OPERATOR : TEAM,
+      // In the operations team: reaches the fence's opsAllow paths. Only ever a teammate.
+      ops: p?.role !== OPERATOR && p?.ops === true,
       // Their WhatsApp ids ("<n>@c.us", "<n>@lid"), for someone the page cannot
       // prove by a saved name or number. Anything else is dropped.
       ids: new Set((Array.isArray(p?.ids) ? p.ids : []).map(String).filter((x) => PERSON_ID.test(x))),
@@ -717,7 +720,7 @@ export function extractAttachments(text) {
  * the folder to teammates outright; this is the narrower rule that lets Tara answer "send
  * it as a PDF" in a group.
  */
-export async function vetAttachment(raw, { roots, sessionsDir = null, since = 0 }) {
+export async function vetAttachment(raw, { roots, sessionsDir = null, since = 0, fence = null, turnEnv = {}, group = false }) {
   let p = String(raw ?? '').trim().replace(/^[`'"]+|[`'"]+$/g, '');
   if (p.startsWith('~/')) p = join(homedir(), p.slice(2));
   if (!isAbsolute(p)) return { error: `${p || 'an empty path'} is not a full path` };
@@ -729,6 +732,19 @@ export async function vetAttachment(raw, { roots, sessionsDir = null, since = 0 
   if (safe.error) return { error: safe.error };
   if (browserRoot && (await stat(safe.path)).mtimeMs < since - 5000) {
     return { error: `${basename(p)} was saved before this request` };
+  }
+  // The path fence, as for Slack's upload: a teammate is not sent what their turn may not
+  // Read, and with no fence config a teammate is sent no file at all. A file only the
+  // operations team may reach does not go into a group.
+  const team = turnEnv.AGENT_REQUESTER_ROLE === TEAM;
+  if (!fence) {
+    if (team) return { error: `${basename(p)}: files for teammates need the path fence` };
+  } else if (fence.error) {
+    return { error: `the path fence could not be read (${fence.error})` };
+  } else {
+    const { reason, opsOnly } = sendRefusal(safe.path, fence, turnEnv);
+    if (reason) return { error: `${basename(p)} ${reason}` };
+    if (opsOnly && group) return { error: `${basename(p)} is for the operations team only, not a group` };
   }
   return { path: safe.path, size: safe.size, name: safeFileName(basename(safe.path)), kind };
 }
@@ -961,7 +977,7 @@ export function sessionsDirFor(config, env = {}) {
  * nobody waits for it, and the caller tells the operator. `run` runs a script in Aside.
  * `{ ok, detail }`: detail is one line for the log and the operator.
  */
-export async function deliverReply({ reply, title, chatId, config, since = Date.now(), boss = '', sessionsDir = null, roots = [WORKSPACE, '/tmp', tmpdir()], run = runRepl }) {
+export async function deliverReply({ reply, title, chatId, config, since = Date.now(), boss = '', sessionsDir = null, roots = [WORKSPACE, '/tmp', tmpdir()], run = runRepl, fence = null, turnEnv = {}, group = false }) {
   const { text, paths } = extractAttachments(reply);
   const files = [];
   const rejects = [];
@@ -970,7 +986,7 @@ export async function deliverReply({ reply, title, chatId, config, since = Date.
       rejects.push(`${basename(raw)}: more than ${MAX_ATTACHMENTS} files`);
       continue;
     }
-    const v = await vetAttachment(raw, { roots, sessionsDir, since });
+    const v = await vetAttachment(raw, { roots, sessionsDir, since, fence, turnEnv, group });
     if (v.error) rejects.push(v.error);
     else files.push(v);
   }
@@ -1010,6 +1026,22 @@ export async function deliverReply({ reply, title, chatId, config, since = Date.
   return { ok, detail };
 }
 
+/** The AGENT_REQUESTER_* values for a person's turn, as the Slack bridge sets them. */
+export function turnEnvFor(who) {
+  if (who.role !== TEAM) return {};
+  return { AGENT_REQUESTER_ROLE: TEAM, AGENT_REQUESTER_ID: `wa:${who.label}`, ...(who.name ? { AGENT_REQUESTER_NAME: String(who.name) } : {}), ...(who.ops ? { AGENT_REQUESTER_OPS: '1' } : {}) };
+}
+
+/** The path fence named by UPLOAD_FENCE, `{ error }` if it will not load, or null if unset. */
+export async function loadFence(path) {
+  if (!path) return null;
+  try {
+    return loadFenceConfig(await readFile(path.startsWith('~/') ? join(homedir(), path.slice(2)) : path, 'utf8'));
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
 export async function runAgentTurn({ prompt, who }) {
   const [{ runAgent }, { PERSONA }, browser, roles, { transcriptPathFor }, { healBrowser }] = await Promise.all([
     import('./runner.mjs'),
@@ -1037,7 +1069,7 @@ export async function runAgentTurn({ prompt, who }) {
       : []),
   ];
   const sessionId = randomUUID();
-  const env = { ...process.env, ...roles.requesterEnv(who.role === TEAM ? TEAM : OPERATOR, `wa:${who.label}`, who.name) };
+  const env = { ...process.env, ...turnEnvFor(who) };
   const spawnFn = (bin, args, opts) => spawn(bin, args, { ...opts, env: { ...opts.env, ...env } });
   const note = isTeam ? roles.roleNote(TEAM, `wa:${who.label}`, 'WhatsApp') : '';
   return runAgent({
@@ -1223,7 +1255,7 @@ async function handle({ c, config, state, env }) {
   if (failed) {
     reply = q.person.role === TEAM ? `Sorry, I hit an error on that one. ${boss ? `${boss} has` : 'The team has'} been told.` : '';
   }
-  const delivery = await deliverReply({ reply, title, chatId: read.chatId, config, since: started, boss, sessionsDir: sessionsDirFor(config, env) });
+  const delivery = await deliverReply({ reply, title, chatId: read.chatId, config, since: started, boss, sessionsDir: sessionsDirFor(config, env), fence: await loadFence(env.UPLOAD_FENCE), turnEnv: turnEnvFor(q.person), group: c.kind === 'group' });
   const sentOk = delivery.ok;
   done({ handled: hash });
   await reactAs(failed || !sentOk ? 'failed' : 'done');

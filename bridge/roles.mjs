@@ -17,6 +17,10 @@
  *      nothing changes for the existing single-user setup.
  *
  * Off by default: with TEAM_USERS unset, only the operator is ever admitted.
+ *
+ * OPS_USERS names teammates in the operations team. They are still teammates in
+ * every way above, except that the fence's `opsAllow` paths (inside `teamDeny`)
+ * are open to them: AGENT_REQUESTER_OPS=1 tells the hooks and tools so.
  */
 
 export const OPERATOR = 'operator';
@@ -47,8 +51,9 @@ export function parseList(value) {
     .filter(Boolean);
 }
 
-export function createRoles({ operator, teamUsers = '', teamChannels = '' } = {}) {
+export function createRoles({ operator, teamUsers = '', teamChannels = '', opsUsers = '' } = {}) {
   const users = new Set(parseList(teamUsers));
+  const ops = new Set(parseList(opsUsers));
   const listed = parseList(teamChannels);
   const channels = new Set(listed.filter((c) => !c.startsWith('!')));
   const except = new Set(listed.filter((c) => c.startsWith('!')).map((c) => c.slice(1)));
@@ -85,6 +90,10 @@ export function createRoles({ operator, teamUsers = '', teamChannels = '' } = {}
     needsKind(userId, channel) {
       return anywhere && !!channel && users.has(userId) && !channels.has(channel) && !except.has(channel);
     },
+    /** Whether this teammate is in the operations team. Only ever true for a teammate. */
+    isOps(userId) {
+      return !!userId && users.has(userId) && ops.has(userId);
+    },
     get teamEnabled() {
       return users.size > 0 && channels.size > 0;
     },
@@ -108,11 +117,12 @@ export function channelKind(c) {
 }
 
 /** The environment a run's hooks read. The operator is the unset default. */
-export function requesterEnv(role, userId, name = '') {
+export function requesterEnv(role, userId, name = '', { ops = false } = {}) {
   if (role !== TEAM) return {};
   return {
     AGENT_REQUESTER_ROLE: TEAM,
     AGENT_REQUESTER_ID: String(userId ?? ''),
+    ...(ops ? { AGENT_REQUESTER_OPS: '1' } : {}),
     // Their name from Slack, so tickets the agent files can credit them.
     ...(name ? { AGENT_REQUESTER_NAME: String(name) } : {}),
   };

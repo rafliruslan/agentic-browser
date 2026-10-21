@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { check, loadConfig, rewrite } from './path-fence-hook.mjs';
+import { check, loadConfig, rewrite, sendRefusal } from './path-fence-hook.mjs';
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), 'fence-')));
 const a1c = join(base, 'A1C');
@@ -147,4 +147,38 @@ test('teammate Greps also exclude the team-denied files, the operator Grep does 
   const team = asRole('team', () => rewrite(grep, teamCfg));
   assert.equal(op.hookSpecificOutput.updatedInput.glob, '*.md !**/.env*');
   assert.equal(team.hookSpecificOutput.updatedInput.glob, '*.md !**/.env* !**/bixgrow-payouts.md');
+});
+
+test('the operations team reaches opsAllow inside teamDeny, and nothing else of it', () => {
+  const r = join(hm, 'memory', 'routines');
+  mkdirSync(join(hm, 'episodic'), { recursive: true });
+  writeFileSync(join(hm, 'episodic', 'day.md'), 'private');
+  const opsCfg = loadConfig(JSON.stringify({
+    readRoots: [a1c], writeRoots: [ws], deny: [hm], allowInsideDeny: [r, join(hm, 'episodic')],
+    denyNames: ['^\\.env(\\..*)?$'],
+    teamDeny: [join(r, 'bixgrow-payouts.md'), join(hm, 'episodic')],
+    opsAllow: [join(r, 'bixgrow-payouts.md')],
+  }));
+  const payouts = ev('Read', { file_path: join(r, 'bixgrow-payouts.md') });
+  const episodic = ev('Read', { file_path: join(hm, 'episodic', 'day.md') });
+  const withEnv = (env, fn) => {
+    const prev = { ...process.env };
+    Object.assign(process.env, env);
+    try { return fn(); } finally {
+      for (const k of ['AGENT_REQUESTER_ROLE', 'AGENT_REQUESTER_OPS']) if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k];
+    }
+  };
+  assert.match(withEnv({ AGENT_REQUESTER_ROLE: 'team' }, () => check(payouts, opsCfg)), /not available/);
+  assert.equal(withEnv({ AGENT_REQUESTER_ROLE: 'team', AGENT_REQUESTER_OPS: '1' }, () => check(payouts, opsCfg)), null);
+  assert.match(withEnv({ AGENT_REQUESTER_ROLE: 'team', AGENT_REQUESTER_OPS: '1' }, () => check(episodic, opsCfg)), /not available/);
+  // Sending follows the same rules, and says when only the ops exception let a file out.
+  const team = { AGENT_REQUESTER_ROLE: 'team' };
+  const ops = { ...team, AGENT_REQUESTER_OPS: '1' };
+  assert.match(sendRefusal(join(r, 'bixgrow-payouts.md'), opsCfg, team).reason, /not available/);
+  assert.deepEqual(sendRefusal(join(r, 'bixgrow-payouts.md'), opsCfg, ops), { reason: null, opsOnly: true });
+  assert.deepEqual(sendRefusal(join(r, 'invoice.md'), opsCfg, team), { reason: null, opsOnly: false });
+  assert.match(sendRefusal(join(hm, 'episodic', 'day.md'), opsCfg, ops).reason, /not available/);
+  assert.deepEqual(sendRefusal(join(r, 'bixgrow-payouts.md'), opsCfg, {}), { reason: null, opsOnly: false });
+  // A secrets-looking name is refused whoever asks.
+  assert.match(sendRefusal(join(a1c, '.env'), opsCfg, {}).reason, /secrets/);
 });

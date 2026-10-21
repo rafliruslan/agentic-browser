@@ -22,6 +22,8 @@ import { toSlackText } from './text.mjs';
 import { buildBlocks } from './blocks.mjs';
 import { extractOfficeText, isLegacyOffice, officeKind } from './office-text.mjs';
 import { describeUnpack, unpackZip } from './zip-unpack.mjs';
+import { sendRefusal } from './path-fence-hook.mjs';
+import { channelKind } from './roles.mjs';
 
 /** Largest file `upload` will send. A screenshot or a chart is a few MB. */
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
@@ -105,6 +107,29 @@ export async function safeUploadPath(path, roots, { maxBytes = MAX_UPLOAD_BYTES 
     return { error: `Refused: ${path} is ${info.size} bytes; the limit is ${maxBytes}.` };
   }
   return { path: real, size: info.size };
+}
+
+/**
+ * Why the path fence keeps this file out of Slack, or null. Uploading a file is reading
+ * it on someone's behalf, so a teammate may not upload what their turn may not Read.
+ * Without a fence config, a teammate's upload is refused outright: fail closed.
+ * A file only the operations team may reach goes only into a DM or a private channel,
+ * never a public one or a group DM, where the rest of the team would see it.
+ */
+export async function uploadFenced(path, channel, { client, fence, env = process.env }) {
+  const team = env.AGENT_REQUESTER_ROLE === 'team';
+  if (!fence) return team ? 'Uploads for teammates need the path fence (UPLOAD_FENCE in the env file). Ask Rafli.' : null;
+  if (fence.error) return `The path fence could not be read (${fence.error}); upload refused.`;
+  const { reason, opsOnly } = sendRefusal(path, fence, env);
+  if (reason) return `${basename(path)} ${reason}`;
+  if (!opsOnly) return null;
+  let kind = null;
+  try {
+    kind = channelKind((await client.conversations.info({ channel })).channel);
+  } catch {
+    // unknown kind: refused below
+  }
+  return kind === 'im' || kind === 'group' ? null : `${basename(path)} is for the operations team only: send it in a DM or a private channel, not here.`;
 }
 
 /** A browser session folder: a date, an underscore, then letters and digits. */
@@ -326,13 +351,15 @@ const fail = (s) => ({ content: [{ type: 'text', text: s }], isError: true });
 /**
  * Run one tool.
  *
- * @param {object} ctx  { client, botUserId, allowedUser, uploadRoots, browserSessions, token, downloadRoot, fetchFn, unzipSandbox }.
+ * @param {object} ctx  { client, botUserId, allowedUser, uploadRoots, browserSessions, token, downloadRoot, fetchFn, unzipSandbox, fence, env }.
+ *   `fence` is the path fence's config (see path-fence-hook.mjs), `{ error }` when it would
+ *   not load, or null when none is set. `env` holds the turn's AGENT_REQUESTER_* values.
  *   `browserSessions` (default null) is the browser's sessions folder; see browserUploadRoot.
  *   `token` is for `file` alone: it goes to slack.com and into no result.
  *   `unzipSandbox` (default true) picks the strict profile in zip-unpack.mjs.
  */
 export async function callTool(name, args = {}, ctx) {
-  const { client, botUserId, allowedUser, uploadRoots = [], browserSessions = null, token, downloadRoot = DEFAULT_DOWNLOAD_ROOT, fetchFn = fetch, unzipSandbox = true } = ctx;
+  const { client, botUserId, allowedUser, uploadRoots = [], browserSessions = null, token, downloadRoot = DEFAULT_DOWNLOAD_ROOT, fetchFn = fetch, unzipSandbox = true, fence = null, env = process.env } = ctx;
   try {
     switch (name) {
       case 'thread': {
@@ -438,6 +465,8 @@ export async function callTool(name, args = {}, ctx) {
         const browserRoot = await browserUploadRoot(args.path, browserSessions);
         const safe = await safeUploadPath(args.path, browserRoot ? [...uploadRoots, browserRoot] : uploadRoots);
         if (safe.error) return fail(safe.error);
+        const refused = await uploadFenced(safe.path, args.channel, { client, fence, env });
+        if (refused) return fail(refused);
         await client.filesUploadV2({
           channel_id: args.channel,
           ...(args.thread_ts ? { thread_ts: args.thread_ts } : {}),

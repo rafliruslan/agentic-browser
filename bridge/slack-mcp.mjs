@@ -18,6 +18,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import bolt from '@slack/bolt';
 import { TOOLS, callTool, parseEnv } from './slack-tools.mjs';
+import { loadConfig } from './path-fence-hook.mjs';
 
 const ENV_PATH = process.env.AGENT_ENV_PATH || join(homedir(), '.config', 'agentic-browser', 'env');
 
@@ -56,7 +57,19 @@ const ctx = {
   // A zip is unpacked under the strict profile unless the env file says UNZIP_SANDBOX=0.
   // Only a deployment whose agent is trusted with whatever a teammate sends should say so.
   unzipSandbox: env.UNZIP_SANDBOX !== '0',
+  // The path fence the agent's file tools obey, so `upload` cannot send what Read refuses.
+  // A config that will not load refuses every upload rather than none.
+  fence: await loadFence(env.UPLOAD_FENCE),
 };
+
+async function loadFence(path) {
+  if (!path) return null;
+  try {
+    return loadConfig(await readFile(path.startsWith('~/') ? join(homedir(), path.slice(2)) : path, 'utf8'));
+  } catch (err) {
+    return { error: err.message };
+  }
+}
 
 const server = new Server({ name: 'slack', version: '0.1.0' }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));

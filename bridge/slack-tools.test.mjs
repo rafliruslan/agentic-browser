@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, symlink, lstat } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import { TOOLS, callTool, parseEnv, safeUploadPath, browserUploadRoot, slackError, safeFileName, downloadSlackFile, privateDir, isPlainZip } from './slack-tools.mjs';
+import { TOOLS, callTool, parseEnv, safeUploadPath, browserUploadRoot, slackError, safeFileName, downloadSlackFile, privateDir, isPlainZip, uploadFenced } from './slack-tools.mjs';
+import { loadConfig } from './path-fence-hook.mjs';
 
 const TOKEN = 'xoxb-000000000000-SECRET-DO-NOT-LEAK';
 
@@ -553,4 +554,31 @@ test('a download named like the unpack folder is not deleted by it', async () =>
   await callTool('file', { file: 'F0ABC12345' }, ctx(client, { token: TOKEN, downloadRoot: root, fetchFn: zipFetch(bytes) }));
   assert.equal((await readFile(join(root, 'F0ABC12345', 'unpacked'))).length, bytes.length);
   assert.equal(await readFile(join(root, 'F0ABC12345', 'unpacked.unpacked', 'a.txt'), 'utf8'), 'a');
+});
+
+test('upload obeys the path fence: teammates are refused barred files, ops only in a DM or private channel', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'upload-fence-'));
+  const routines = join(dir, 'routines');
+  await mkdir(routines, { recursive: true });
+  const payouts = join(routines, 'payouts.md');
+  const plain = join(dir, 'report.pdf');
+  await writeFile(payouts, 'x');
+  await writeFile(plain, 'x');
+  const fence = loadConfig(JSON.stringify({ teamDeny: [routines], opsAllow: [payouts], denyNames: ['^credentials'] }));
+  const kinds = { D1: { is_im: true }, G1: { is_private: true }, C1: { is_channel: true }, M1: { is_mpim: true } };
+  const client = { conversations: { info: async ({ channel }) => ({ channel: kinds[channel] }) } };
+  const team = { AGENT_REQUESTER_ROLE: 'team' };
+  const ops = { ...team, AGENT_REQUESTER_OPS: '1' };
+  const up = (path, channel, env, f = fence) => uploadFenced(path, channel, { client, fence: f, env });
+
+  assert.equal(await up(payouts, 'C1', {}), null, 'operator');
+  assert.equal(await up(plain, 'C1', team), null, 'a plain file for a teammate');
+  assert.match(await up(payouts, 'D1', team), /not available/);
+  assert.equal(await up(payouts, 'D1', ops), null);
+  assert.equal(await up(payouts, 'G1', ops), null);
+  for (const ch of ['C1', 'M1', 'unknown']) assert.match(await up(payouts, ch, ops), /operations team only/, ch);
+  // No fence: a teammate gets nothing, the operator is unchanged. A broken fence refuses everyone.
+  assert.match(await up(plain, 'C1', team, null), /need the path fence/);
+  assert.equal(await up(plain, 'C1', {}, null), null);
+  assert.match(await up(plain, 'C1', {}, { error: 'bad json' }), /could not be read/);
 });
