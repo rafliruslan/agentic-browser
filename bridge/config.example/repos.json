@@ -1,0 +1,10 @@
+{
+  "_why": "For repos-mcp.mjs. Copy next to the github-token file. direct: true allows straight pushes to main and the base branch, and merges. Use false where a push to the base or main deploys something a person should check first.",
+  "org": "your-org",
+  "author": { "name": "Agent", "email": "agent@users.noreply.github.com" },
+  "workRoot": "~/agent-workspace/repos",
+  "repos": {
+    "landing-page": { "base": "develop", "direct": true },
+    "backend": { "base": "develop", "direct": false }
+  }
+}
