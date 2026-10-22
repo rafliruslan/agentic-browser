@@ -5,7 +5,7 @@ import {
   unansweredTail, isGenuineDm, provenSender, unprovenAsks, qualifying, isFresh, tailHash, underBudget, toWhatsApp,
   buildPrompt, runRepl, SCAN_JS, readJs, sendJs, reactJs, candidateFor, REACTIONS, OPERATOR, TEAM, isNoReply,
   composerSteps, normComposer, extractAttachments, attachmentKind, vetAttachment, serveFiles, sendFilesJs, deliverReply, sessionsDirFor, turnEnvFor,
-  MAX_ATTACHMENTS, parseMedia, pickMedia, mediaLines, mediaJs, saveMedia, MAX_MEDIA, MAX_MEDIA_BYTES,
+  MAX_ATTACHMENTS, lateArrivals, withLate, parseMedia, pickMedia, mediaLines, mediaJs, saveMedia, MAX_MEDIA, MAX_MEDIA_BYTES,
 } from './whatsapp.mjs';
 import { EventEmitter } from 'node:events';
 import vm from 'node:vm';
@@ -855,4 +855,20 @@ test('saveMedia names a document by its WhatsApp name, refuses unreadable ones, 
   // Not a real docx: saved, with a note that its text could not be pulled out.
   assert.match(out[2].path, /notes\.docx$/);
   assert.match(out[2].note, /could not be pulled out/);
+});
+
+test('a message that came in during a run is found, and joins the tail under the reply', () => {
+  const ask = { ...m('Dana Hart', '@Tara hide it'), id: 'a' };
+  const yes = { ...m('Robin', '@Tara yes, go'), id: 'b' };
+  const reply = { ...m(SELF, 'needs a yes'), id: 'c' };
+  const before = [{ ...m('Dana Hart', 'old'), id: 'o' }, ask];
+  const after = [...before, yes, reply];
+  const late = lateArrivals(before, after, SELF);
+  assert.deepEqual([...late], ['b']);
+  assert.deepEqual(unansweredTail(after, SELF), []);
+  assert.deepEqual(withLate(after, unansweredTail(after, SELF), late).map((x) => x.id), ['b']);
+  // A later message after the reply is in the tail as usual, in order.
+  const later = [...after, { ...m('Dana Hart', 'and this'), id: 'd' }];
+  assert.deepEqual(withLate(later, unansweredTail(later, SELF), late).map((x) => x.id), ['b', 'd']);
+  assert.deepEqual(withLate(later, unansweredTail(later, SELF), new Set()).map((x) => x.id), ['d']);
 });

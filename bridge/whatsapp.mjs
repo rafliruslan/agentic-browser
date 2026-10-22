@@ -357,6 +357,22 @@ export function mediaLines({ fetch = [], named = [], files = [], from }) {
   return lines;
 }
 
+/**
+ * Ids of messages that were not there at the first read and are not the
+ * account's own: they came in while the agent worked.
+ */
+export function lateArrivals(before, after, selfName) {
+  const known = new Set(before.map((m) => m.id));
+  return new Set(after.filter((m) => m.id && !known.has(m.id) && m.sender !== selfName).map((m) => m.id));
+}
+
+/** The unanswered tail, plus the `late` messages that the account's reply landed under, in chat order. */
+export function withLate(messages, tail, late) {
+  if (!late?.size) return tail;
+  const inTail = new Set(tail);
+  return messages.filter((m) => inTail.has(m) || late.has(m.id));
+}
+
 export function tailHash(tail) {
   const h = createHash('sha1');
   for (const m of tail) h.update(`${m.sender}\n${m.at?.toISOString() ?? ''}\n${m.text}\n`);
@@ -845,26 +861,24 @@ if (state !== 'ok') { out({ state }); } else {
           }
           if (!matched) { problem = 'composer did not match'; break; }
           if (DRY) { sent += 1; continue; }
-          const lastId = () => page.evaluate(() => {
-            const last = [...document.querySelectorAll('#main [data-pre-plain-text^="["]')].slice(-1)[0];
-            return last ? (last.closest('[data-id]')?.getAttribute('data-id') || '') : '';
-          });
-          const beforeId = await lastId();
+          const recentIds = () => page.evaluate(() => [...document.querySelectorAll('#main [data-pre-plain-text^="["]')].slice(-30).map((m) => m.closest('[data-id]')?.getAttribute('data-id') || ''));
+          const beforeIds = await recentIds();
           await page.locator('#main footer button[aria-label="Send"]').click();
           // Compare letters and digits only: a bubble's innerText drops emoji,
           // which are images, so the sent text would never match with them in.
           const alnum = (x) => x.replace(/[^\\p{L}\\p{N}]+/gu, '');
           const want = alnum(chunk).slice(0, 20);
+          // Any of the last few bubbles, not only the last: someone else's
+          // message can land under ours while it is checked. New means its id
+          // was not on the page before Send.
           let seen = false;
           for (let i = 0; i < 12 && !seen; i++) {
             await sleep(700);
-            seen = await page.evaluate(([self, w, before]) => {
-              const last = [...document.querySelectorAll('#main [data-pre-plain-text^="["]')].slice(-1)[0];
-              if (!last) return false;
-              const id = last.closest('[data-id]')?.getAttribute('data-id') || '';
-              const text = (last.innerText || '').replace(/[^\\p{L}\\p{N}]+/gu, '');
-              return id !== before && (last.getAttribute('data-pre-plain-text') || '').includes(self) && text.startsWith(w);
-            }, [SELF, want, beforeId]);
+            seen = await page.evaluate(([self, w, before]) => [...document.querySelectorAll('#main [data-pre-plain-text^="["]')].slice(-5).some((m) => {
+              const id = m.closest('[data-id]')?.getAttribute('data-id') || '';
+              const text = (m.innerText || '').replace(/[^\\p{L}\\p{N}]+/gu, '');
+              return id && !before.includes(id) && (m.getAttribute('data-pre-plain-text') || '').includes(self) && text.startsWith(w);
+            }), [SELF, want, beforeIds]);
           }
           if (!seen) { problem = 'bubble not seen'; break; }
           sent += 1;
@@ -1443,7 +1457,7 @@ async function fetchMedia({ read, messages, request, c, title, config, who }) {
   return mediaLines({ ...picked, files, from: who.name });
 }
 
-async function handle({ c, config, state, env }) {
+async function handle({ c, config, state, env, late = new Set(), depth = 0 }) {
   const title = c.row.title;
   const sig = rowSignature(c.row);
   const done = (extra = {}) => {
@@ -1470,7 +1484,7 @@ async function handle({ c, config, state, env }) {
     return done();
   }
 
-  const tail = unansweredTail(messages, config.selfName);
+  const tail = withLate(messages, unansweredTail(messages, config.selfName), late);
   if (!tail.length) {
     log(`"${title}": already answered`);
     return done();
@@ -1527,6 +1541,18 @@ async function handle({ c, config, state, env }) {
     if (r.state !== 'ok' || !r.reacted) log(`"${title}": reaction ${emoji} not set:`, r.state, r.problem ?? r.error ?? '');
   };
 
+  // A message that came in during the run was read by the open chat, so it
+  // has no badge, and the reply now sits under it. Look again, once or twice.
+  const recheck = async () => {
+    if (depth >= 2) return;
+    const again = await runRepl(config.account, readJs(title));
+    if (again.state !== 'ok' || again.header !== title) return log(`"${title}": recheck failed:`, again.state);
+    const fresh = lateArrivals(messages, parseMessages(again.messages), config.selfName);
+    if (!fresh.size) return;
+    log(`"${title}": ${fresh.size} message(s) came in during the run; looking at them`);
+    await handle({ c, config, state, env, late: fresh, depth: depth + 1 });
+  };
+
   const started = Date.now();
   // The reaction and the agent run side by side: the agent does not open WhatsApp.
   const [result] = await Promise.all([runAgentTurn({ prompt, who: q.person, dm: c.kind === 'dm' }), reactAs('working')]);
@@ -1538,7 +1564,8 @@ async function handle({ c, config, state, env }) {
   if (!failed && isNoReply(reply)) {
     log(`"${title}": no reply needed (${secs}s)`);
     await reactAs('done');
-    return done({ handled: hash });
+    done({ handled: hash });
+    return recheck();
   }
   const boss = [...config.people.values()].find((p) => p.role === OPERATOR)?.name;
   if (failed) {
@@ -1560,6 +1587,8 @@ async function handle({ c, config, state, env }) {
   } else if (config.notify === 'all') {
     await notifyOperator(config, env, `WhatsApp: answered ${q.person.name} (${q.person.role}) in ${c.kind === 'group' ? `"${title}"` : 'a DM'}. They asked: "${excerpt}". ${secs}s.`);
   }
+
+  await recheck();
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
