@@ -232,7 +232,7 @@ export async function privateDir(path) {
 }
 
 /** Write a new file, never through a link someone left at that name. */
-async function writeFresh(path, data) {
+export async function writeFresh(path, data) {
   await rm(path, { force: true }); // removes a link itself, not what it points at
   await writeFile(path, data, { mode: 0o600, flag: 'wx' });
 }
