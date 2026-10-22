@@ -207,7 +207,8 @@ export function createLinearHandler({ client, agent, runTurn, stopTurn, linearTo
 /**
  * Pull on a timer and hand each event to `handle` without waiting for it, so a
  * long run does not stop the next event arriving. Backs off when the relay is
- * unreachable instead of hammering it.
+ * unreachable instead of hammering it. A single failed pull is a network blip
+ * the next pull recovers from, so only a second one in a row is logged.
  */
 export function startPoller({
   pull,
@@ -216,6 +217,7 @@ export function startPoller({
   maxBackoffMs = 60_000,
   log = console,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  now = () => new Date(),
 }) {
   let stopped = false;
   (async () => {
@@ -232,7 +234,11 @@ export function startPoller({
         await sleep(intervalMs);
       } catch (err) {
         failures += 1;
-        log.warn?.(`[linear] pull failed (${failures}): ${err.message}`);
+        if (failures >= 2) {
+          // fetch's own message is just "fetch failed"; the reason is in its cause.
+          const cause = err.cause?.code || err.cause?.message;
+          log.warn?.(`${now().toISOString()} [linear] pull failed (${failures}): ${err.message}${cause ? ` (${cause})` : ''}`);
+        }
         await sleep(Math.min(maxBackoffMs, intervalMs * 2 ** failures));
       }
     }

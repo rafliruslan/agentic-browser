@@ -240,6 +240,29 @@ test('poller hands events on without waiting, rests when empty, backs off on err
   assert.deepEqual(sleeps, [20, 10, 10]);
 });
 
+test('the poller logs only a second failure in a row, with the time and the cause', async () => {
+  const warns = [];
+  let n = 0;
+  let stop;
+  const blip = () => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) });
+  const pull = async () => {
+    n += 1;
+    // One blip, a good pull, then two failures in a row.
+    if (n === 1 || n === 3 || n === 4) throw blip();
+    if (n === 5) stop.stop();
+    return [];
+  };
+  stop = startPoller({
+    pull,
+    handle: async () => {},
+    log: { ...quiet, warn: (m) => warns.push(m) },
+    sleep: async () => {},
+    now: () => new Date('2026-10-22T01:02:03.000Z'),
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(warns, ['2026-10-22T01:02:03.000Z [linear] pull failed (2): fetch failed (ECONNRESET)']);
+});
+
 import { TEAM_DENIED_TOOLS } from './roles.mjs';
 
 const MATE = '11111111-2222-3333-4444-555555555555';
