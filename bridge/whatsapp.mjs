@@ -266,7 +266,7 @@ const NAMED_MEDIA = { video: 'a video', ptt: 'a voice note', audio: 'an audio fi
 /** The documents the agent can read: what the bridge sends, minus nothing. */
 const READABLE_DOC = /\.(pdf|txt|csv|docx|xlsx|pptx)$/i;
 export const MAX_MEDIA = 4;
-export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
+export const MAX_MEDIA_BYTES = 30 * 1024 * 1024;
 
 /** Raw media rows from `readJs` -> `{id, idx, type, mime, size, name, fromMe, author}`; stickers dropped. */
 export function parseMedia(raw) {
@@ -1400,7 +1400,8 @@ async function fetchMedia({ read, messages, request, c, title, config, who }) {
   const picked = pickMedia({ messages, media: parseMedia(read.media), request, kind: c.kind, selfName: config.selfName });
   let files = [];
   if (picked.fetch.length) try {
-    const got = await runRepl(config.account, mediaJs(title, picked.fetch.map((x) => ({ id: x.id, type: x.type, size: x.size }))));
+    // Four files at the cap are about 160 MB of base64; a 30 MB one crosses in under 10 s.
+    const got = await runRepl(config.account, mediaJs(title, picked.fetch.map((x) => ({ id: x.id, type: x.type, size: x.size }))), { timeoutMs: 300_000 });
     if (got.state !== 'ok' || got.header !== title || got.chatId !== read.chatId) {
       const why = got.state !== 'ok' ? got.state : 'the chat changed';
       log(`"${title}": files not fetched: ${why} ${got.error ?? ''}`);
