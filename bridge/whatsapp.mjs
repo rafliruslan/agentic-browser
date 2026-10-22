@@ -285,21 +285,42 @@ export function parseMedia(raw) {
 }
 
 /**
+ * Does this group photo or file belong to the request? It is the request
+ * message itself (a captioned photo), or one sent with no caption by the same
+ * sender right next to it, with nothing else between. Another of their
+ * messages, even one since the last answer, is a different subject.
+ */
+function withRequest(x, request, messages, media) {
+  const at = new Map(media.map((y) => [y.idx, y]));
+  const said = new Set(messages.map((m) => m.idx));
+  return request.some((r) => {
+    if (!r.author || x.author !== r.author) return false;
+    if (x.idx === r.idx) return true;
+    if (said.has(x.idx)) return false;
+    const step = x.idx < r.idx ? 1 : -1;
+    for (let i = x.idx + step; i !== r.idx; i += step) {
+      const y = at.get(i);
+      if (!y || y.author !== r.author || said.has(i)) return false;
+    }
+    return true;
+  });
+}
+
+/**
  * The photos and documents that go with this request: `{ fetch, named }`.
  *
  * A photo sent without a caption is not a message the bridge reads (it has no
  * stamp), so media is matched by position instead: everything after the
  * account's last own message. In a DM that is all of it. In a group, only what
- * the people making the request sent, by WhatsApp's own sender id, so a
- * stranger's file never rides along. The newest `max` photos and readable
+ * came with the request itself (`withRequest`), by WhatsApp's own sender id, so
+ * neither a stranger's file nor the asker's earlier, unrelated one rides along. The newest `max` photos and readable
  * documents under the size cap are fetched; the rest, and anything that cannot
  * be fetched, is only named so the agent can say it did not see it.
  */
 export function pickMedia({ messages, media, request, kind, selfName, max = MAX_MEDIA, maxBytes = MAX_MEDIA_BYTES }) {
   // A photo the account sent with no caption is its own message too.
   const lastOwn = Math.max(-1, ...messages.filter((m) => m.sender === selfName).map((m) => m.idx), ...media.filter((x) => x.fromMe).map((x) => x.idx));
-  const authors = new Set(request.map((m) => m.author).filter(Boolean));
-  const theirs = media.filter((x) => x.idx > lastOwn && !x.fromMe && (kind === 'dm' || (x.author && authors.has(x.author))));
+  const theirs = media.filter((x) => x.idx > lastOwn && !x.fromMe && (kind === 'dm' || withRequest(x, request, messages, media)));
   const fetch = [];
   const named = [];
   for (const x of [...theirs].reverse()) {

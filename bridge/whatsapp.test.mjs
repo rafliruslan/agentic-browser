@@ -760,12 +760,23 @@ test('pickMedia in a DM takes everything after the account\'s last own message o
   assert.deepEqual(pickMedia({ messages, media: media.filter((x) => !x.fromMe), request: [messages[2]], kind: 'dm', selfName: SELF }).fetch.map((x) => x.idx), [3, 6]);
 });
 
-test('pickMedia in a group takes only what the people asking sent', () => {
-  const ask = at('Dana Hart', '@Tara see this', 4, { author: '111@lid' });
-  const messages = [at(SELF, 'earlier', 0), ask];
-  const media = [photo(2), photo(3, { author: '999@lid' }), photo(5, { author: '' })];
+test('pickMedia in a group takes only what came with the request', () => {
+  const ask = at('Dana Hart', '@Tara see this', 6, { author: '111@lid' });
+  const earlier = at('Dana Hart', 'look at this cafe', 2, { author: '111@lid' });
+  const messages = [at(SELF, 'earlier', 0), earlier, ask];
+  const media = [
+    photo(2), // the earlier captioned photo: another subject
+    photo(3, { author: '999@lid' }), // a stranger's
+    photo(4), photo(5), // no caption, sent right before the ask
+    photo(6), // the ask's own photo
+    photo(7), // no caption, right after
+    photo(8, { author: '' }),
+  ];
   const { fetch } = pickMedia({ messages, media, request: [ask], kind: 'group', selfName: SELF });
-  assert.deepEqual(fetch.map((x) => x.idx), [2]);
+  assert.deepEqual(fetch.map((x) => x.idx), [4, 5, 6, 7]);
+  // A stranger's photo between breaks the run.
+  const broken = media.map((x) => (x.idx === 5 ? { ...x, author: '999@lid' } : x));
+  assert.deepEqual(pickMedia({ messages, media: broken, request: [ask], kind: 'group', selfName: SELF }).fetch.map((x) => x.idx), [6, 7]);
   // A request with no sender id on the page matches no photo at all.
   assert.deepEqual(pickMedia({ messages, media, request: [{ ...ask, author: '' }], kind: 'group', selfName: SELF }).fetch, []);
 });
