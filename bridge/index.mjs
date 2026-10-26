@@ -38,6 +38,7 @@ import { createRunRegistry } from './runs.mjs';
 import { createRelayClient, createLinearHandler, startPoller, runPolicy } from './linear.mjs';
 import { watchOwnBinary } from './binary-watch.mjs';
 import { watchSocket } from './socket-watch.mjs';
+import { createCatchup, createSeen, lateNote, LOOKBACK_MS, STARTUP_MS } from './catchup.mjs';
 
 const { App } = bolt;
 
@@ -296,6 +297,10 @@ async function main() {
 
   const subscriptions = createSubscriptionStore();
 
+  // Mentions this process has already taken, live or by catch-up, so neither
+  // path answers one twice. See catchup.mjs.
+  const seen = createSeen();
+
   // She answers when tagged. She reads the thread either way: the next turn
   // pastes the whole thread, so anything said while she was quiet is still in
   // front of her when she is finally tagged. AGENT_MENTION_ONLY=0 restores the
@@ -393,7 +398,7 @@ async function main() {
   }
 
   // One path for both entry points: a mention, and a reply in a followed thread.
-  async function handleTurn({ event, client, text }) {
+  async function handleTurn({ event, client, text, late = false }) {
     // The whole access control. Anyone else in the channel is ignored in
     // silence: replying would tell an unauthorised user the bot is listening.
     const role = roles.roleOf(event.user, event.channel, event.channel_type);
@@ -474,7 +479,7 @@ async function main() {
         const task = composeTask(prompt, threadContext);
         // Who she is browsing as, before what she is being asked. An empty
         // string when unknown, so nothing is claimed that is not known.
-        const note = [roleNote(role, event.user), identityNote(IDENTITY), locationNote({ channel, threadTs })]
+        const note = [roleNote(role, event.user), identityNote(IDENTITY), locationNote({ channel, threadTs }), late ? lateNote(event.ts) : '']
           .filter(Boolean)
           .join('\n\n');
         // Persona on a thread's first turn only. After that it lives in the
@@ -623,6 +628,8 @@ async function main() {
   }
 
   app.event('app_mention', async ({ event, client }) => {
+    // Already taken by a catch-up, or a delivery Slack repeated.
+    if (!seen.claim(event.channel, event.ts)) return;
     // Before handleInterrupt, which has no user check of its own: anyone able to
     // tag her could otherwise end a run with `!stop`.
     await withKind(event, client);
@@ -733,6 +740,27 @@ async function main() {
   console.log(`[agent] workspace ${WORKSPACE}, concurrency ${concurrency}, channels ${ALLOWED_CHANNEL || '*'}`);
   console.log(roles.teamEnabled ? `[agent] team access on: ${roles.counts.users} user(s) in ${roles.counts.channels} channel(s)` : '[agent] team access off: operator only');
 
+  // Mentions sent while there was no socket are never delivered. Look for
+  // them once now, for the time this bridge was not running, and after every
+  // reconnect from a little before the drop. See catchup.mjs.
+  const catchUp = createCatchup({
+    client: app.client,
+    botUserId,
+    seen,
+    isInterrupt: (text) => Boolean(parseInterrupt(text)),
+    dispatch: async (m) => {
+      const event = { type: 'app_mention', channel: m.channel, ts: m.ts, thread_ts: m.thread_ts, user: m.user, text: m.text, files: m.files };
+      await withKind(event, app.client);
+      if (!roles.roleOf(event.user, event.channel, event.channel_type)) {
+        console.log(`[catchup] ignored missed mention from ${event.user}`);
+        return;
+      }
+      await handleTurn({ event, client: app.client, text: event.text, late: true });
+    },
+    log: console,
+  });
+  catchUp(Date.now() - STARTUP_MS, 'startup');
+
   // When brew deletes the node binary this process started on, exit so
   // launchd restarts it on the current one. Releases the lock first, the same
   // as a signal does. See binary-watch.mjs.
@@ -745,6 +773,7 @@ async function main() {
     busy: () => runs.size() > 0,
     log: console,
     exit: (code) => { release().finally(() => process.exit(code)); },
+    onReconnect: (downSince) => catchUp(downSince - LOOKBACK_MS, 'reconnect'),
   });
 
   // Linear, when the env names a relay. After the lock, so a refused duplicate

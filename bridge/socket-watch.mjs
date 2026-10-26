@@ -19,6 +19,9 @@
  *
  * Every drop and recovery is logged with a time, so the next incident shows
  * how long the bridge was deaf instead of leaving a guess.
+ *
+ * `onReconnect(downSince)` runs on each recovery, so the caller can look for
+ * mentions sent while there was no socket. See catchup.mjs.
  */
 
 export const CHECK_MS = 30 * 1000;
@@ -54,14 +57,18 @@ export function watchSocket({
   now = () => Date.now(),
   log = console,
   exit = (code) => process.exit(code),
+  onReconnect = () => {},
 }) {
   const state = { up: true, since: now() };
   const stamp = () => new Date(now()).toISOString();
 
   client.on('connected', () => {
-    if (!state.up) log.log?.(`[slack] ${stamp()} reconnected after ${secs(now() - state.since)} down`);
+    const wasDown = !state.up;
+    const downSince = state.since;
+    if (wasDown) log.log?.(`[slack] ${stamp()} reconnected after ${secs(now() - downSince)} down`);
     state.up = true;
     state.since = now();
+    if (wasDown) onReconnect(downSince);
   });
   for (const name of DOWN_EVENTS) {
     client.on(name, () => {

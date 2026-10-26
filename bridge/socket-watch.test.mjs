@@ -92,3 +92,18 @@ test('the timer never keeps a finished process alive', () => {
   assert.equal(w.timer.hasRef(), false);
   clearInterval(w.timer);
 });
+
+test('a recovery reports when the drop began, so a catch-up can start there', async () => {
+  let t = 5_000;
+  const client = new EventEmitter();
+  const got = [];
+  const w = watchSocket({ client, intervalMs: 1e6, now: () => t, log: quiet, exit() {}, onReconnect: (since) => got.push(since) });
+  client.emit('connected');
+  client.emit('reconnecting');
+  t += 700;
+  client.emit('connecting');
+  t += 300;
+  client.emit('connected');
+  clearInterval(w.timer);
+  assert.deepEqual(got, [5_000], 'once, for the real recovery, from the first drop');
+});
