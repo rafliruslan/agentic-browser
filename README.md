@@ -1,14 +1,16 @@
 # agentic-browser
 
-Tag it in Slack, it works in the browser you are already signed in to. Runs on
-Linux and macOS, billed to a Claude subscription rather than per token.
+Tag it in Slack, mention it in Linear, or message a WhatsApp chat it watches,
+and it works in the browser you are already signed in to. Runs on Linux and
+macOS, billed to a Claude subscription rather than per token.
 
 Built because [Aside](https://aside.com) is macOS-only and
 [Hermes Agent](https://github.com/NousResearch/hermes-agent) runs anywhere but
 has no first-class browser, and its Claude path needs a Max plan with purchased
-extra credits. This is Claude Code, your real browser, and about 2700 lines of
-bridge in between, with 960 lines of tests over the parts that can be tested
-without a browser.
+extra credits. This is Claude Code, your real browser, and a bridge in between:
+about 9,700 lines, with 6,800 lines of tests over the parts that can be tested
+without a browser. It began at 2,700. Most of the growth is guardrails, added
+once teammates could use it too.
 
 On Linux that browser is Brave over CDP, which was the whole reason this exists.
 On macOS it is Aside, driven through its MCP server, because Aside is the better
@@ -20,22 +22,24 @@ It is smaller and less capable than either. [How it compares](#how-it-compares),
 honestly, below.
 
 ```
-Slack (Socket Mode)
-  └─→ bridge (systemd user service)
-        └─→ claude -p            ← your Claude subscription, not API billing
-              └─→ Playwright MCP + chrome-devtools-mcp
-                    └─→ your real Brave, already logged in
+Slack (Socket Mode) ──────────┐
+Linear → relay (a Worker) ────┼─→ bridge (systemd / launchd)
+WhatsApp Web, on a timer ─────┘     └─→ claude -p        ← your Claude subscription, not API billing
+                                          └─→ browser MCP   (Aside, or Playwright + chrome-devtools-mcp)
+                                                └─→ your real browser, already logged in
 ```
 
-## Four parts, usable separately
+## The parts, usable separately
 
 | | |
 |---|---|
 | **`plugin/`** | A Claude Code plugin: four MCP servers on one running Brave, plus the browser skills and `/browser-setup`. Useful on its own if you just want Claude Code to drive your browser from a terminal. The two servers written here live under it, because a plugin can only reach files inside its own root. |
-| **`bridge/`** | The harness. A Slack Socket Mode daemon that maps threads to sessions, serialises work per thread, survives restarts, and recovers its own orphaned messages. |
+| **`bridge/`** | The harness. Front doors for Slack, Linear and WhatsApp that map conversations to sessions, serialise work per thread, survive restarts, and recover their own orphaned messages. Also the scheduled routines, and tool servers that hold the Slack and git tokens so the agent never does. |
 | **`workspace/`** | The agent's memory and skills, as a starting template. Semantic memory it reads on demand, procedural skills it can extend itself. |
 | **`plugin/repl/`** | A third MCP server of our own: accessibility snapshots that return a **diff**, and `fetch`, which calls a site's own API from inside a tab already signed in to it. See `plugin/repl/README.md`. |
 | **`plugin/memory/`** | A fourth: ranked search over `workspace/memory/` that returns matching **sections** rather than files. |
+| **`linear-relay/`** | A Cloudflare Worker that takes Linear's webhooks, checks the signature and author, and queues them for a bridge to pull. The only public piece: nothing on the machine listens. See `linear-relay/README.md`. |
+| **`sync/`** | Keeps each agent's memory folder in a git repo across machines: commit, merge and push every few minutes. A conflict, or anything that looks like a secret, stops that one store with the reason on disk. |
 
 ## It learns while you use it
 
@@ -110,25 +114,70 @@ first written into the prompt, and the agent still got them wrong often enough t
 matter. They are now deterministic functions applied to every message on the way
 out, which is also what let the persona shrink by 82%.
 
-## It follows a thread once it has answered
+## It answers when tagged
 
-A mention is a good way to start a conversation and a poor way to continue one.
-After the agent replies in a thread it follows that thread, so the next reply
-reaches it with no @mention.
+A mention starts a turn; an untagged reply does not. Talking in a thread the
+agent is in should not mean talking *to* it. It still reads the whole thread
+when tagged, so whatever was said while it was quiet is in front of it.
 
-Following is deliberately narrow, because subscribing to `message.*` means
-receiving every message in every channel the bot is in. `shouldHandle` drops
-almost all of it before any work happens: other people, other channels, edits,
-joins, top-level messages, and the bot's own posts. What survives is a reply
-from the one allowed user, in a thread the agent is already part of.
+`AGENT_MENTION_ONLY=0` restores the older mode: after replying it follows the
+thread for a day, and a plain reply from the allowed user reaches it with no
+@mention. Following is narrow on purpose, because subscribing to `message.*`
+means receiving every message in every channel the bot is in, and
+`shouldHandle` drops almost all of it before any work happens. A mention
+arrives twice, once as `app_mention` and once as `message`; the message path
+ignores anything containing the bot's id, so the task runs once. Saying `stop`,
+`quiet` or `stand down` in the thread ends following and the agent waves.
 
-A mention inside a followed thread arrives twice, once as `app_mention` and
-once as `message`. The message path ignores anything containing the bot's id,
-so the mention path owns it and the task runs once.
+**Cutting in.** A reply in a busy thread waits behind the run, which is right
+for a follow-up and useless for "no, not that". A message that starts with `!`
+interrupts instead, with no tag needed: `!stop` ends the run, and `!` followed
+by anything else ends it and starts the next turn with that as the instruction.
+The conversation survives, because the session comes from the thread; only the
+step in flight is lost. A teammate may stop or steer only a run they started.
 
-Following expires after a day of silence, refreshed each time the agent
-answers. Saying `stop`, `quiet` or `stand down` in the thread ends it at once
-and the agent waves.
+**Choosing the model.** Sonnet takes the ordinary turn and Opus takes work that
+is visual or deep, picked by a word list rather than a classifier, because being
+wrong costs one pricier run and a classifier would cost a round trip on every
+message. Open with `deep:` or `fast:` to choose yourself.
+
+## Linear, WhatsApp and routines
+
+**Linear.** Mention the agent in an issue, or assign it one, and
+`linear-relay/` queues the event; the bridge pulls it. The relay has already
+checked the signature and that the author is the operator. The issue's own text
+is everyone's words, so it reaches the agent fenced as data. An event is handed
+over once and deleted first: a crashed bridge loses it rather than replaying an
+action in a logged-in browser.
+
+**WhatsApp.** A number linked to a browser has no socket, so `whatsapp.mjs`
+wakes every minute, reads the chat list in WhatsApp Web, and answers the few
+chats named in its config. Four rules, each against a real failure:
+
+- **Allowlist only.** A chat not in the config is never opened, read or marked
+  read. The default `mode: "dry"` opens nothing and logs what it would do.
+- **The bridge sends, not the agent.** The agent returns text; the bridge checks
+  the chat header, types it, sends, and reads the bubble back. A prompt cannot
+  make it message another chat.
+- **A human who answered first wins.** Only messages after the account's own
+  last message count, so a reply from the phone ends the matter.
+- **No role escalation.** A chat's role comes from the config. A sender's name
+  is trusted only when the page proves it: a saved contact, the sender's own
+  number, or an id pinned in the config.
+
+Photos and documents sent with a request (PDF, text, CSV, Word, Excel,
+PowerPoint; up to four, 30 MB each) are saved to a private folder and handed
+over by path, with the text of Office files extracted. In a group only the files
+that came with the request count, not whatever else is in the chat. A message
+that arrives while a run is going is answered when the run ends, instead of
+being buried under the reply.
+
+**Routines.** `routines.mjs` runs scheduled work described in
+`memory/routines/*.md`, and the file is both the instruction and the memory: a
+run that learns something writes it back where the next run reads. Routines
+report unless one opts in to acting, keep one log line per run, and a run
+missed while the machine slept is skipped rather than fired late. A payout
+reminder at midnight because the laptop woke up is worse than none.
 
 ## Only one bridge at a time
 
@@ -144,6 +193,32 @@ wedges a restart.
 
 That covers one machine. It cannot see a bridge running elsewhere on the same
 Slack app, so if you move the agent to another box, stop the old one first.
+
+## It notices when it has gone deaf
+
+Each of these was found the same way: someone asked why the agent had stopped
+answering.
+
+- **The socket dies quietly.** Socket Mode reconnects on its own, but some
+  errors end its retries and a reconnect that never completes logs nothing.
+  `socket-watch.mjs` follows the client's own events and exits after three
+  minutes down, so the service manager starts a fresh bridge. A run in flight
+  gets ten more minutes first, since it replies over HTTP.
+- **Mentions sent while it is deaf are gone.** Slack delivers an event to
+  whatever socket is open, retries for a few minutes, then gives up, so a
+  laptop with its lid shut misses whatever was sent meanwhile. After every
+  reconnect, and once at startup, `catchup.mjs` reads recent channel and thread
+  history for mentions with no reaction or reply from the bot, and answers them
+  with a note that they arrived late. One already seen live is skipped, so a
+  late retry from Slack is not answered twice, and a late `!stop` is never
+  replayed into whatever is running now.
+- **An upgrade deletes the binary it runs on.** `binary-watch.mjs` exits when
+  the node it started on disappears, and the service manager restarts it on the
+  new one. Homebrew can also replace a library that a pinned node links
+  against: the running bridge carries on, and every new node process it starts,
+  tool servers included, dies on launch. `node -v` after an upgrade tells you.
+
+## Git hooks
 
 Hooks are not installed by a clone. Run this once per checkout:
 
@@ -169,18 +244,18 @@ browser, which is very good and is why it is the macOS layer.
 | Licence | MIT | commercial | open source |
 | Browser | first-class, real profile | **first-class, real profile** | not a focus |
 | Billing on Claude | **subscription** (`claude -p`) | subscription | Max + purchased extra credits, or per-token API |
-| Channels | Slack | Slack, Telegram, Discord | **Slack, Telegram, Discord, WhatsApp, Signal, CLI** |
-| Memory | markdown files, grep | local-first, structured | **FTS5 + LLM summarisation** |
+| Channels | Slack, Linear, WhatsApp (polled) | Slack, Telegram, Discord | **Slack, Telegram, Discord, WhatsApp, Signal, CLI** |
+| Memory | markdown files, ranked section search | local-first, structured | **FTS5 + LLM summarisation** |
 | Skills | markdown, self-extending, site notes injected on arrival | markdown, keyword auto-inject | markdown, self-improving |
 | Execution backends | local | local | **6, incl. Docker, SSH, Modal** |
-| Users | one, for one day | many | many |
+| Users | an operator plus teammates, two tiers | many | many |
 
 ### Where Aside is better
 
 It tops the browser-agent benchmarks (Online-Mind2Web, BU-Bench-V1 and
-Odysseys), and this has been used by one person for one day. It shields
-credentials from the model at the vault layer, where this only instructs the
-agent not to print them. Its single `repl` tool is more expressive than granular
+Odysseys), and this is used by one small team. It shields credentials from the
+model at the vault layer. Here the Slack and git tokens sit in tool servers the
+agent cannot read, but anything visible in the browser is visible to it. Its single `repl` tool is more expressive than granular
 MCP calls: one 120-second call can snapshot, decide, act and verify where this
 takes a dozen round-trips. The `fetch` tool closes part of that: where a site
 has an API, this now reaches it in one call with the session attached, the same
@@ -201,10 +276,10 @@ calendar event behind, and nothing else broke.
 
 ### Where Hermes is better
 
-Six messaging channels through one gateway against this one. Six execution
-backends against local-only. And real memory *retrieval*, full-text search with
-LLM summarisation, where this greps a directory of markdown. That works at ten
-files and will not at two hundred.
+Six messaging channels through one gateway against three here, one of them a
+browser tab read once a minute. Six execution backends against local-only. And
+real memory *retrieval*, full-text search with LLM summarisation, where this
+ranks sections of a markdown folder by keyword.
 
 ### Where Hermes is worse
 
@@ -284,13 +359,14 @@ assistant that still carries the honesty and autonomy rules.
 You need a Slack app with Socket Mode on, `app_mention` subscribed, and 12 bot
 scopes: `app_mentions:read`, `chat:write`, `users:read`, `channels:read`,
 `groups:read`, `mpim:read`, `im:read`, the four `*:history` ones, which
-`conversations.replies` needs so it can read a thread it was tagged into late, and
+`conversations.replies` needs so it can read a thread it was tagged into late
+and find mentions it missed while disconnected, and
 `files:read`, without which the `file` tool gets Slack's login page instead of an
 attachment.
 
-To let the agent follow a thread after it has replied, also subscribe to the
-`message.channels`, `message.groups`, `message.im` and `message.mpim` bot
-events. These need no new scopes: the four `*:history` ones above already cover
+So that an untagged `!stop` reaches a run, and for following threads under
+`AGENT_MENTION_ONLY=0`, also subscribe to the `message.channels`,
+`message.groups`, `message.im` and `message.mpim` bot events. These need no new scopes: the four `*:history` ones above already cover
 them, so it is a config change rather than a reinstall.
 
 `reactions:write` is optional. With it, the agent marks your own message 👀 when
@@ -300,6 +376,14 @@ and nothing else changes.
 
 ### Teammates and other settings
 
+A teammate is a second tier, enforced in code rather than asked for in the
+prompt. They are served only in listed channels. Their turns refuse the shell,
+free-prompt agents and scheduling, and the path fence refuses credentials and
+operator-only pages when the hooks are told a teammate is asking. Each teammate
+gets a conversation of their own in a thread, so they never inherit what the
+operator asked there earlier. `OPS_USERS` opens a little more to an operations
+team, and only where nobody else can read the reply.
+
 All optional, all in `~/.config/agentic-browser/env`; `config.example/env` has
 each one with a comment.
 
@@ -307,8 +391,17 @@ each one with a comment.
 |---|---|
 | `TEAM_USERS` | Member ids of teammates, a second tier. Their turns get no shell, no free-prompt browser agent and no scheduling, and the hooks fence off credentials and operator-only pages. Unset: operator only. |
 | `TEAM_CHANNELS` | Where teammates are served: channel ids, `*` for every channel the bot is in, `!C...` to leave one out. Under `*` a DM or group DM never counts, and a channel whose kind Slack cannot confirm is refused. Empty: nowhere. |
+| `OPS_USERS` | Teammates in the operations team. They reach the fence's `opsAllow` paths, but only in their own DM with the agent or a private channel whose members are all ops, the operator, the agent or an app on `OPS_BOTS`. Elsewhere they are fenced like any teammate. |
+| `OPS_BOTS` | Apps allowed in that private channel, such as Linear. Any other member turns it back into an ordinary channel. |
+| `UPLOAD_FENCE` | The path fence JSON the file tools use. Set it and Slack `upload` and WhatsApp attachments obey it too, so a teammate is not sent what their turn may not read. Unset, teammates are sent no files. |
+| `MAX_CONCURRENT` | How many runs may be in flight at once across threads. Default 3. |
+| `LINEAR_RELAY_URL`, `LINEAR_RELAY_TOKEN`, `LINEAR_AGENT` | All three or none: where the relay is, this bridge's pull token, and the name the relay knows it by. Set up the Worker first; see `linear-relay/README.md`. |
 | `UNZIP_SANDBOX` | The `file` tool unpacks a `.zip` beside it and lists the files; nothing in it is run. The default strict profile has lower size caps and skips programs, scripts, installers and hidden files. `0` turns it off. |
 | `UPLOAD_BROWSER_SESSIONS` | Absolute path of the browser's sessions folder. `upload` may then send a file the browser saved to a session's `artifacts/` or `tmp/`, judged by its real path. Never on a teammate's turn. |
+
+WhatsApp has its own config, `whatsapp.json` (path in `WA_CONFIG`), naming the
+chats to answer and each one's role, and runs from a timer job like the
+routines. It starts in dry mode.
 
 Slack has no typing indicator for ordinary bots. The nearest equivalent is
 `assistant.threads.setStatus`, which needs the app configured as an AI
@@ -333,7 +426,8 @@ both machines, and the thing that differs is one JSON file.
 
 Nothing else in the bridge or the REPL is written against an OS. Every path is
 `homedir()` plus an XDG-shaped suffix, which is a plain directory on macOS too.
-`node --test` passes 151/151 on both.
+`node --test` in `bridge/` passes 672/672, last run on macOS. The WhatsApp
+front door is the exception to all this: it drives WhatsApp Web through Aside.
 
 ### The allowlist is derived, not written down
 
@@ -372,8 +466,8 @@ JavaScript against the live logged-in browser. There is no granular
 allowing it grants exactly the capability that was removed on Linux. That is
 not a setting, it is the shape of the API.
 
-So on macOS the guardrail is the workspace cwd, the single allowed Slack user,
-and a human reading every reply. It is a real reduction against the Linux
+So on macOS the guardrails are the path fence on file tools, the fence around
+tool output, the allowed users, and a human reading every reply. It is a real reduction against the Linux
 setup, and worth knowing which machine you are talking to.
 
 ### Service manager
@@ -482,9 +576,18 @@ with every session it holds.** It binds to `127.0.0.1` only, but that is the
 honest description. Inherent to the design, not incidental.
 
 **Prompt injection is live.** The agent reads arbitrary web pages while holding
-your real sessions. The skills tell it to treat page content as data and never as
-instructions. That is not a security boundary. Do not point this at pages you
-would not trust with your accounts.
+your real sessions. Every MCP result is wrapped between markers carrying a fresh
+random nonce (`fence.mjs`), so the agent can see where outside text starts and
+ends, and a page cannot print its own closing marker. That is a mitigation, not
+a boundary: a model can still be talked round, and text inside an image is not
+fenced. Do not point this at pages you would not trust with your accounts.
+
+**The agent does not hold the tokens.** Slack and the company repos are reached
+through tool servers (`slack-tools.mjs`, `repos-tools.mjs`) that read the token
+themselves and hand the agent verbs. Pushes never force, nothing deletes a ref,
+and every refspec is built from an allowlist rather than taken from the agent.
+File tools are kept inside named folders by a PreToolUse hook
+(`path-fence-hook.mjs`) that fails closed.
 
 **Everything happens as you.** Messages come from you, not a bot. Calendar
 declines notify real colleagues. There is no undo layer.
