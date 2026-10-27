@@ -93,6 +93,7 @@ each one with a comment.
 |---|---|
 | `TEAM_USERS` | Member ids of teammates, a second tier. Their turns get no shell, no free-prompt browser agent and no scheduling, and the hooks fence off credentials and operator-only pages. Unset: operator only. |
 | `TEAM_CHANNELS` | Where teammates are served: channel ids, `*` for every channel the bot is in, `!C...` to leave one out. Under `*` a DM or group DM never counts, and a channel whose kind Slack cannot confirm is refused. Empty: nowhere. |
+| `TEAM_DMS` | `1` lets people DM the agent. A top-level DM needs no tag and no thread: the DM is one conversation, answered flat, and the last ten messages go in as context. A teammate is admitted in their own DM only (never a group DM). Needs the `message.im` event and `im:history`, plus the App Home Messages tab with sending allowed. Unset: DMs are ignored, as before. |
 | `OPS_USERS` | Teammates in the operations team. They reach the fence's `opsAllow` paths, but only in their own DM with the agent or a private channel whose members are all ops, the operator, the agent or an app on `OPS_BOTS`. Elsewhere they are fenced like any teammate. |
 | `OPS_BOTS` | Apps allowed in that private channel, such as Linear. Any other member turns it back into an ordinary channel. |
 | `UPLOAD_FENCE` | The path fence JSON the file tools use. Set it and Slack `upload` and WhatsApp attachments obey it too, so a teammate is not sent what their turn may not read. Unset, teammates are sent no files. |

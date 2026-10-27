@@ -115,7 +115,7 @@ export function createSubscriptionStore({
  * fetchThreadContext pastes the whole thread on the next turn, so everything
  * said while she was quiet is still read when she is finally tagged.
  */
-export function shouldHandle(event, { botUserId, allowedUser, subscribed, mentionOnly = false } = {}) {
+export function shouldHandle(event, { botUserId, allowedUser, subscribed, mentionOnly = false, direct = false } = {}) {
   if (!event) return false;
 
   // Our own messages, and anything else posted by an app.
@@ -127,6 +127,11 @@ export function shouldHandle(event, { botUserId, allowedUser, subscribed, mentio
 
   // One person may drive the agent. Same boundary as a mention.
   if (allowedUser && event.user !== allowedUser) return false;
+
+  // A direct message is a request in itself: no thread, no tag. The caller sets
+  // `direct` only for an IM, and only when direct messages are switched on. The
+  // checks above (not a bot, a plain message, an admitted sender) still apply.
+  if (direct) return true;
 
   // Thread replies only. A top-level message is a new conversation, and
   // starting one still requires a mention.

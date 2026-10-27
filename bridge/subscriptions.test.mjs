@@ -217,3 +217,24 @@ test('stopping a live run still needs no tag', () => {
   // mention. Mention-only must not quietly disarm it.
   assert.equal(canInterrupt(base({ text: '!stop' }), { botUserId: BOT, allowedUser: OPERATOR }), true);
 });
+
+// Direct messages: a request in itself, but every other gate still holds.
+test('a top-level DM is handled when direct is on', () => {
+  const dm = base({ thread_ts: undefined, text: 'hello' });
+  assert.equal(shouldHandle(dm, { botUserId: BOT, allowedUser: OPERATOR, subscribed: false, mentionOnly: true, direct: true }), true);
+  assert.equal(shouldHandle(dm, { botUserId: BOT, allowedUser: OPERATOR, subscribed: false, mentionOnly: true }), false);
+});
+
+test('direct does not loosen the sender, bot or subtype checks', () => {
+  const opts = { botUserId: BOT, allowedUser: OPERATOR, subscribed: false, mentionOnly: true, direct: true };
+  assert.equal(shouldHandle(base({ thread_ts: undefined, user: 'USTRANGER' }), opts), false);
+  assert.equal(shouldHandle(base({ thread_ts: undefined, user: BOT }), opts), false);
+  assert.equal(shouldHandle(base({ thread_ts: undefined, bot_id: 'B1' }), opts), false);
+  assert.equal(shouldHandle(base({ thread_ts: undefined, subtype: 'message_changed' }), opts), false);
+  assert.equal(shouldHandle(base({ thread_ts: undefined, subtype: 'file_share' }), opts), true);
+});
+
+test('a DM that tags the bot is handled here and left to the seen-set to dedupe', () => {
+  const dm = base({ thread_ts: undefined, text: `<@${BOT}> hi` });
+  assert.equal(shouldHandle(dm, { botUserId: BOT, allowedUser: OPERATOR, subscribed: false, mentionOnly: true, direct: true }), true);
+});

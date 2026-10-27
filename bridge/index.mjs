@@ -19,7 +19,7 @@ import { PERSONA } from './persona.mjs';
 import { createSessionStore, DEFAULT_STATE_PATH } from './sessions.mjs';
 import { createPendingStore, DEFAULT_PENDING_PATH } from './pending.mjs';
 import { createQueue } from './queue.mjs';
-import { fetchThreadContext, composeTask, locationNote, describeFiles } from './thread.mjs';
+import { fetchThreadContext, fetchDmContext, composeTask, locationNote, dmLocationNote, describeFiles } from './thread.mjs';
 import { parseMention, formatResult } from './text.mjs';
 import { buildBlocks } from './blocks.mjs';
 import { spawn } from 'node:child_process';
@@ -187,6 +187,9 @@ function toLegacyResult(r) {
 async function main() {
   const env = await loadEnv();
   const { SLACK_BOT_TOKEN, SLACK_APP_TOKEN, ALLOWED_USER, ALLOWED_CHANNEL, MAX_CONCURRENT, TEAM_USERS, TEAM_CHANNELS, OPS_USERS } = env;
+  // Direct messages are off unless TEAM_DMS=1. Then a DM with the bot is a
+  // conversation in itself: no tag, no thread, one session per DM.
+  const DMS = env.TEAM_DMS === '1';
 
   const concurrency = Number.parseInt(MAX_CONCURRENT, 10) > 0
     ? Number.parseInt(MAX_CONCURRENT, 10)
@@ -199,7 +202,14 @@ async function main() {
     throw new Error(`ALLOWED_USER must be set in ${ENV_PATH}; it is the only access control`);
   }
   // The operator, plus optional teammates in listed channels only. See roles.mjs.
-  const roles = createRoles({ operator: ALLOWED_USER, teamUsers: TEAM_USERS, teamChannels: TEAM_CHANNELS, opsUsers: OPS_USERS });
+  const roles = createRoles({ operator: ALLOWED_USER, teamUsers: TEAM_USERS, teamChannels: TEAM_CHANNELS, opsUsers: OPS_USERS, dms: DMS });
+
+  // A top-level message in a DM has no thread to hold the conversation, so the
+  // DM itself is the conversation: it keys the session, the queue and the run
+  // registry, and the reply is posted flat. A reply inside a thread in a DM
+  // keeps the thread model.
+  const isFlatDm = (event) => DMS && event.channel_type === 'im' && !event.thread_ts;
+  const convKeyFor = (event) => (isFlatDm(event) ? `dm:${event.channel}` : event.thread_ts || event.ts);
 
   // Under TEAM_CHANNELS=*, a teammate's role depends on whether the
   // conversation is a channel or a (group) DM. A message event says so in
@@ -284,7 +294,7 @@ async function main() {
       await app.client.chat.postMessage({
         token: SLACK_BOT_TOKEN,
         channel: orphan.channel,
-        thread_ts: orphan.threadTs,
+        ...(orphan.threadTs ? { thread_ts: orphan.threadTs } : {}),
         text: '❌ The bridge restarted while this was running. Ask me again.',
       });
     } catch {
@@ -323,8 +333,12 @@ async function main() {
     // disk read per message to compute a value nobody uses is the kind of cost
     // that only shows up in a busy workspace.
     const subscribed = MENTION_ONLY ? false : await subscriptions.isSubscribed(event.thread_ts);
-    if (!shouldHandle(event, { botUserId, allowedUser: gateUserFor(roles, event, ALLOWED_USER), subscribed, mentionOnly: MENTION_ONLY })) return;
-    if (isStopPhrase(event.text)) {
+    const direct = DMS && event.channel_type === 'im';
+    if (!shouldHandle(event, { botUserId, allowedUser: gateUserFor(roles, event, ALLOWED_USER), subscribed, mentionOnly: MENTION_ONLY, direct })) return;
+    // A DM that tags the bot may also arrive as app_mention. Whichever comes
+    // first runs; the other finds it taken.
+    if (direct && !seen.claim(event.channel, event.ts)) return;
+    if (!direct && isStopPhrase(event.text)) {
       await subscriptions.unsubscribe(event.thread_ts);
       await react(client, { channel: event.channel, ts: event.ts, name: 'wave', logger: console });
       console.log(`[agent] unfollowed ${event.thread_ts}`);
@@ -352,26 +366,29 @@ async function main() {
     if (!parsed) return false;
 
     const threadTs = event.thread_ts || event.ts;
+    // Where a flat DM's run is filed, and where replies go: nowhere, flat.
+    const runKey = convKeyFor(event);
+    const replyAt = isFlatDm(event) ? {} : { thread_ts: threadTs };
     // Read before stopping: the handle goes away with the run.
-    const startedBy = runs.startedBy(threadTs);
+    const startedBy = runs.startedBy(runKey);
     // A teammate may stop or steer only a run they started. The operator may
     // end any run.
     const sender = roles.roleOf(event.user, event.channel, event.channel_type);
     if (sender === TEAM && startedBy && startedBy.user !== event.user) {
       await client.chat.postMessage({
         channel: event.channel,
-        thread_ts: threadTs,
+        ...replyAt,
         text: 'Only the person who started this run, or Rafli, can stop or steer it.',
       });
       return true;
     }
-    const stopped = runs.stop(threadTs);
+    const stopped = runs.stop(runKey);
 
     // Clear the progress signals the run set, by the same calls a normal finish
     // uses, and against the message that STARTED it rather than this one.
     // Skipping this leaves a 👀 on the original message and a pending record
     // the next boot sweeps up and apologises for.
-    await setStatus(client, { channel: event.channel, threadTs, status: '', logger: console });
+    await setStatus(client, { channel: event.channel, threadTs: replyAt.thread_ts, status: '', logger: console });
     if (startedBy) {
       await settle(client, { channel: startedBy.channel, ts: startedBy.ts, ok: false, logger: console });
       await pendingStore.remove(startedBy.channel, startedBy.ts);
@@ -380,16 +397,16 @@ async function main() {
     if (parsed.stop) {
       await client.chat.postMessage({
         channel: event.channel,
-        thread_ts: threadTs,
+        ...replyAt,
         text: stopped
           ? 'Stopped. Whatever it was partway through stays partway through.'
           : 'Nothing was running.',
       });
-      console.log(`[agent] stop ${threadTs} (killed=${stopped})`);
+      console.log(`[agent] stop ${runKey} (killed=${stopped})`);
       return true;
     }
 
-    console.log(`[agent] steer ${threadTs} (killed=${stopped})`);
+    console.log(`[agent] steer ${runKey} (killed=${stopped})`);
     // Re-enter as an ordinary turn carrying the new instruction. The session
     // id comes from the thread, so the conversation continues; only the step
     // that was in flight is lost.
@@ -413,6 +430,10 @@ async function main() {
 
     const channel = event.channel;
     const threadTs = event.thread_ts || event.ts;
+    // A flat DM is filed under the DM and answered with no thread. See isFlatDm.
+    const flat = isFlatDm(event);
+    const convKey = convKeyFor(event);
+    const replyAt = flat ? {} : { thread_ts: threadTs };
     const mentioned = parseMention(text ?? event.text, botUserId);
     // Route on what the user typed, then strip the routing marker so the model is
     // never handed "deep:" as part of the task.
@@ -422,7 +443,7 @@ async function main() {
     const prompt = [stripDirective(mentioned), describeFiles(event.files)].filter(Boolean).join('\n');
     // A teammate gets a conversation of their own in the thread. Sharing the
     // operator's would hand them whatever he asked for earlier in it.
-    const sessionKey = role === TEAM ? `${threadTs}:team:${event.user}` : threadTs;
+    const sessionKey = role === TEAM ? `${convKey}:team:${event.user}` : convKey;
     // A teammate's turn refuses more tools, and its hooks are told who is asking.
     const turnDenied = role === TEAM ? [...DENIED, ...TEAM_DENIED_TOOLS] : DENIED;
     // Their Slack name, so a Linear ticket the agent files can credit them. Empty
@@ -444,14 +465,14 @@ async function main() {
     const spawnForTurn = (bin, args, opts) =>
       spawn(bin, args, { ...opts, env: { ...opts.env, ...requesterEnv(role, event.user, requesterName, { ops: opsHere }) } });
 
-    await queue.add(threadTs, async () => {
+    await queue.add(convKey, async () => {
       let ok = false;
 
       try {
         // Recorded BEFORE the run, cleared after: that ordering is what makes
         // "still present at startup" mean "orphaned" and nothing else. Keyed
         // on the triggering message, which is also what carries the reaction.
-        await pendingStore.add(channel, event.ts, { threadTs });
+        await pendingStore.add(channel, event.ts, { threadTs: replyAt.thread_ts });
         // The two progress signals, and there is no longer a third. A
         // "running…" placeholder used to say the same thing in the one form
         // that persists, so it had to be edited away afterwards; these do not.
@@ -459,18 +480,20 @@ async function main() {
         // Both are best effort: without the scopes they no-op, and then the
         // reply arriving is the only signal, which is how this worked before.
         await react(client, { channel, ts: event.ts, name: WORKING, logger: console });
-        await setStatus(client, { channel, threadTs, status: 'Working…', logger: console });
-        console.log(`[agent] ${threadTs} -> ${route.model}/${route.effort} (${route.reason})`);
+        await setStatus(client, { channel, threadTs: replyAt.thread_ts, status: 'Working…', logger: console });
+        console.log(`[agent] ${convKey} -> ${route.model}/${route.effort} (${route.reason})`);
 
-        const threadContext = await fetchThreadContext(client, {
+        const contextArgs = {
           channel,
-          threadTs,
           botUserId,
           skipTs: event.ts,
           // On a teammate's turn the requester is the user, so their own earlier
           // messages in the thread read as theirs and the operator's as someone else's.
           allowedUser: role === TEAM ? event.user : ALLOWED_USER,
-        });
+        };
+        const threadContext = flat
+          ? await fetchDmContext(client, contextArgs)
+          : await fetchThreadContext(client, { ...contextArgs, threadTs });
 
         const existing = await sessions.get(sessionKey);
         const sessionId = existing || (await sessions.idFor(sessionKey));
@@ -479,7 +502,7 @@ async function main() {
         const task = composeTask(prompt, threadContext);
         // Who she is browsing as, before what she is being asked. An empty
         // string when unknown, so nothing is claimed that is not known.
-        const note = [roleNote(role, event.user), identityNote(IDENTITY), locationNote({ channel, threadTs }), late ? lateNote(event.ts) : '']
+        const note = [roleNote(role, event.user), identityNote(IDENTITY), (flat ? dmLocationNote({ channel }) : locationNote({ channel, threadTs })), late ? lateNote(event.ts) : '']
           .filter(Boolean)
           .join('\n\n');
         // Persona on a thread's first turn only. After that it lives in the
@@ -531,7 +554,7 @@ async function main() {
           deniedTools: turnDenied,
           spawnFn: spawnForTurn,
           transcriptPath: transcriptPathFor(WORKSPACE, sessionId),
-          onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts, user: event.user, role }),
+          onSpawn: (child) => runs.track(convKey, child, { channel, ts: event.ts, user: event.user, role }),
         });
 
         // Belt and braces for the same failure arriving another way: if the id
@@ -551,14 +574,14 @@ async function main() {
             deniedTools: turnDenied,
             spawnFn: spawnForTurn,
             transcriptPath: transcriptPathFor(WORKSPACE, sessionId),
-            onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts, user: event.user, role }),
+            onSpawn: (child) => runs.track(convKey, child, { channel, ts: event.ts, user: event.user, role }),
           });
         }
 
         // A resumed session that is gone never recovers. Release the thread and
         // silently retry in a fresh one rather than showing the user an error.
         if (!result.ok && result.deadSession && !isNew) {
-          console.log(`[agent] session ${sessionId} is gone; restarting thread ${threadTs}`);
+          console.log(`[agent] session ${sessionId} is gone; restarting thread ${convKey}`);
           await sessions.forget(sessionKey);
           const freshId = await sessions.idFor(sessionKey);
           result = await runAgent({
@@ -573,7 +596,7 @@ async function main() {
             deniedTools: turnDenied,
             spawnFn: spawnForTurn,
             transcriptPath: transcriptPathFor(WORKSPACE, freshId),
-            onSpawn: (child) => runs.track(threadTs, child, { channel, ts: event.ts, user: event.user, role }),
+            onSpawn: (child) => runs.track(convKey, child, { channel, ts: event.ts, user: event.user, role }),
           });
           if (result.ok) await sessions.set(sessionKey, freshId);
         } else if (result.ok) {
@@ -581,15 +604,15 @@ async function main() {
         }
 
         if (result.denials?.length) {
-          console.log(`[agent] ${result.denials.length} permission denial(s) in ${threadTs}`);
+          console.log(`[agent] ${result.denials.length} permission denial(s) in ${convKey}`);
         }
 
         // A run killed by !stop exits non-zero and reports failure, so this
         // posted "❌ Failed." immediately before "Stopped." Nothing went
         // wrong, and the thread read as though it had. The mark is taken, not
         // peeked, so the next run on this thread is judged on its own result.
-        if (runs.takeStopped(threadTs)) {
-          console.log(`[agent] ${threadTs} was stopped on purpose; not posting the run result`);
+        if (runs.takeStopped(convKey)) {
+          console.log(`[agent] ${convKey} was stopped on purpose; not posting the run result`);
           return;
         }
 
@@ -598,7 +621,7 @@ async function main() {
 
         await client.chat.postMessage({
           channel,
-          thread_ts: threadTs,
+          ...replyAt,
           text: body,
           ...(blocks ? { blocks } : {}),
         });
@@ -607,13 +630,13 @@ async function main() {
         // Only worth recording when a follow-up could act on it. Under
         // mention-only nothing reads the store, so writing it every reply just
         // grows a file that is never opened.
-        if (ok && !MENTION_ONLY) await subscriptions.subscribe(threadTs, { channel });
+        if (ok && !MENTION_ONLY && !flat) await subscriptions.subscribe(threadTs, { channel });
       } catch (err) {
         console.error('[agent] run failed:', err);
         try {
           await client.chat.postMessage({
             channel,
-            thread_ts: threadTs,
+            ...replyAt,
             text: `❌ bridge error: ${err.message}`,
           });
         } catch {
@@ -621,7 +644,7 @@ async function main() {
         }
       } finally {
         await settle(client, { channel, ts: event.ts, ok, logger: console });
-        await setStatus(client, { channel, threadTs, status: '', logger: console });
+        await setStatus(client, { channel, threadTs: replyAt.thread_ts, status: '', logger: console });
         await pendingStore.remove(channel, event.ts);
       }
     });
@@ -739,6 +762,7 @@ async function main() {
   console.log(`[agent] connected as ${auth.user} (${botUserId}) in ${auth.team}`);
   console.log(`[agent] workspace ${WORKSPACE}, concurrency ${concurrency}, channels ${ALLOWED_CHANNEL || '*'}`);
   console.log(roles.teamEnabled ? `[agent] team access on: ${roles.counts.users} user(s) in ${roles.counts.channels} channel(s)` : '[agent] team access off: operator only');
+  console.log(`[agent] direct messages ${DMS ? 'on' : 'off'}`);
 
   // Mentions sent while there was no socket are never delivered. Look for
   // them once now, for the time this bridge was not running, and after every

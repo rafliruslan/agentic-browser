@@ -185,3 +185,34 @@ test('a file with no id, or no files at all, adds nothing', () => {
   assert.equal(describeFiles([{ name: 'x.pdf' }]), '');
   assert.equal(formatThread([msg(OPERATOR, 'hi')], BOT, null, OPERATOR), '[the user] hi');
 });
+
+test('fetchDmContext reads history oldest first and labels the sender', async () => {
+  const { fetchDmContext } = await import('./thread.mjs');
+  const client = {
+    conversations: {
+      history: async ({ channel, limit }) => {
+        assert.equal(channel, 'D1');
+        assert.equal(limit, 11);
+        return { messages: [
+          { ts: '3', user: 'U_A', text: 'yes' },
+          { ts: '2', bot_id: 'B1', user: 'UBOT', text: 'OK to file this?' },
+          { ts: '1', user: 'U_A', text: 'file a ticket' },
+        ] };
+      },
+    },
+  };
+  const out = await fetchDmContext(client, { channel: 'D1', botUserId: 'UBOT', skipTs: '3', allowedUser: 'U_A' });
+  assert.equal(out, '[the user] file a ticket\n[the agent] OK to file this?');
+});
+
+test('fetchDmContext returns nothing when Slack refuses', async () => {
+  const { fetchDmContext } = await import('./thread.mjs');
+  const client = { conversations: { history: async () => { throw new Error('missing_scope'); } } };
+  assert.equal(await fetchDmContext(client, { channel: 'D1', botUserId: 'UBOT' }), '');
+});
+
+test('dmLocationNote names the channel and says no thread', async () => {
+  const { dmLocationNote } = await import('./thread.mjs');
+  assert.match(dmLocationNote({ channel: 'D1' }), /`D1`/);
+  assert.equal(dmLocationNote({}), '');
+});

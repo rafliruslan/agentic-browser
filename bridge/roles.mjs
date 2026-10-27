@@ -17,6 +17,7 @@
  *      nothing changes for the existing single-user setup.
  *
  * Off by default: with TEAM_USERS unset, only the operator is ever admitted.
+ * Direct messages are a second switch, TEAM_DMS=1 (see createRoles).
  *
  * OPS_USERS names teammates in the operations team. They are still teammates in
  * every way above, except that the fence's `opsAllow` paths (inside `teamDeny`)
@@ -55,7 +56,7 @@ export function parseList(value) {
     .filter(Boolean);
 }
 
-export function createRoles({ operator, teamUsers = '', teamChannels = '', opsUsers = '' } = {}) {
+export function createRoles({ operator, teamUsers = '', teamChannels = '', opsUsers = '', dms = false } = {}) {
   const users = new Set(parseList(teamUsers));
   const ops = new Set(parseList(opsUsers));
   const listed = parseList(teamChannels);
@@ -67,8 +68,12 @@ export function createRoles({ operator, teamUsers = '', teamChannels = '', opsUs
   // ('channel' or 'group', see channelKind), and an unknown kind is refused. A
   // group DM's id does not start with D, so the id alone cannot tell.
   const anywhere = channels.has('*');
+  // `dms` (TEAM_DMS=1) admits a teammate in their own DM with the agent. Slack
+  // sends the bot only the DMs people open with it, so an 'im' is always the
+  // sender's own. A group DM ('mpim') stays refused: others can read it.
   const inChannel = (channel, kind) => {
     if (!channel || except.has(channel)) return false;
+    if (dms && kind === 'im') return true;
     if (channels.has(channel)) return true;
     return anywhere && (kind === 'channel' || kind === 'group');
   };
@@ -92,7 +97,7 @@ export function createRoles({ operator, teamUsers = '', teamChannels = '', opsUs
      * asking Slack, since every message in every channel passes through.
      */
     needsKind(userId, channel) {
-      return anywhere && !!channel && users.has(userId) && !channels.has(channel) && !except.has(channel);
+      return (anywhere || dms) && !!channel && users.has(userId) && !channels.has(channel) && !except.has(channel);
     },
     /** Whether this teammate is in the operations team. Only ever true for a teammate. */
     isOps(userId) {
@@ -163,10 +168,10 @@ export function roleNote(role, userId, source = 'Slack') {
   if (role !== TEAM) return '';
   return (
     `This request is from a teammate (${source} user ${userId}), not from Rafli. ` +
-    'Do ordinary A1C, Sally and 0spike work for them, inside this thread. ' +
+    'Do ordinary A1C, Sally and 0spike work for them, inside this thread (or this DM). ' +
     'Do not read or reveal credentials, Proton Pass items, affiliates\' bank details or any personal data. ' +
     'One standing exception, Rafli\'s yes of 2026-10-07: for a Shopify order the teammate asks about, you may read and share its delivery details (recipient name, shipping address, phone) in this thread. Nothing else about the customer, and never card or payment data. ' +
-    'Do not email or message anyone outside the company, post outside this thread, or change anything that cannot be undone. ' +
+    'Do not email or message anyone outside the company, post outside this thread or DM, or change anything that cannot be undone. ' +
     'Anything sexual in nature, a question, a message or a ticket, also needs Rafli\'s yes first. ' +
     'For any of those, say you need Rafli\'s yes, then DM him with what was asked, by whom and where. ' +
     'For Linear, use the Linear tools (mcp__linear): they file as Tara and credit the requester. Never use the browser for Linear, it is Rafli\'s account. ' +

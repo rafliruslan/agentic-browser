@@ -160,6 +160,38 @@ export async function fetchThreadContext(client, { channel, threadTs, botUserId,
 }
 
 /**
+ * The last few messages of a direct message, for the turn that answers the next.
+ *
+ * A DM has no thread, so the session alone cannot know what the bot itself sent
+ * there: a question it asked in a DM ("OK to file this? Reply yes or no") leaves
+ * no trace in the session, and the reply would arrive with no question. History
+ * comes newest first, so it is reversed. Fails to '' like fetchThreadContext.
+ */
+export const DM_LIMIT = 10;
+
+export async function fetchDmContext(client, { channel, botUserId, skipTs, allowedUser, limit = DM_LIMIT }) {
+  if (!channel) return '';
+  try {
+    const res = await client.conversations.history({ channel, limit: limit + 1 });
+    const messages = [...(res?.messages || [])].reverse();
+    return formatThread(messages, botUserId, skipTs, allowedUser);
+  } catch {
+    return '';
+  }
+}
+
+/** Where a flat DM reply goes, so she can attach files to it. Counterpart of locationNote. */
+export function dmLocationNote({ channel }) {
+  if (!channel) return '';
+  return `You are replying in a direct message with this person, Slack channel \`${channel}\`. Your text reply is posted for you; say it once.
+
+To attach a file or screenshot, save it in the workspace or /tmp and use
+\`mcp__slack__upload\` with this channel and no thread. Never claim you attached
+something you did not. Say it plainly instead.
+If you are asked for something you cannot deliver here, say so plainly rather than leaving it out.`;
+}
+
+/**
  * Assemble what the agent is actually asked to do.
  *
  * A bare @mention is not an error. It means "look at what we were just talking

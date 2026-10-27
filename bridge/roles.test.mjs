@@ -160,3 +160,23 @@ test('opsPrivate: only the requester\'s own DM, or a private channel of ops alon
   for (const ch of ['D2', 'G2', 'G3', 'G4', 'C1', 'M1', 'nope']) assert.equal(await opsPrivate(client, ch, opts), false, ch);
   assert.equal(await opsPrivate(client, 'D1', { ...opts, requester: '' }), false);
 });
+
+test('TEAM_DMS admits a teammate in a DM, never a group DM, and only teammates', () => {
+  const off = createRoles({ operator: OP, teamUsers: 'U_A', teamChannels: '*' });
+  assert.equal(off.roleOf('U_A', 'D_DM', 'im'), null);
+  const on = createRoles({ operator: OP, teamUsers: 'U_A', teamChannels: '*,!C_PRIVATE', dms: true });
+  assert.equal(on.roleOf('U_A', 'D_DM', 'im'), TEAM);
+  assert.equal(on.roleOf('U_A', 'G_MPIM', 'mpim'), null);
+  assert.equal(on.roleOf('U_A', 'D_DM'), null);
+  assert.equal(on.roleOf('U_X', 'D_DM', 'im'), null);
+  assert.equal(on.roleOf(OP, 'D_DM', 'im'), OPERATOR);
+  assert.equal(on.roleOf('U_A', 'C_NEW', 'channel'), TEAM);
+});
+
+test('a DM with no channel list still works under TEAM_DMS, and an excluded DM is refused', () => {
+  const roles = createRoles({ operator: OP, teamUsers: 'U_A', teamChannels: '!D_NO', dms: true });
+  assert.equal(roles.roleOf('U_A', 'D_OK', 'im'), TEAM);
+  assert.equal(roles.roleOf('U_A', 'D_NO', 'im'), null);
+  assert.equal(roles.needsKind('U_A', 'D_OK'), true);
+  assert.equal(roles.needsKind('U_X', 'D_OK'), false);
+});
