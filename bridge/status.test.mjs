@@ -70,7 +70,7 @@ test('reactionFor follows what the agent said about the request', () => {
 test('reactionFor without a status line reads a closing question as waiting', () => {
   assert.equal(reactionFor({ ok: true, outcome: null, text: 'Found two.\nWhich one first?' }), QUESTION);
   assert.equal(reactionFor({ ok: true, outcome: null, text: 'Which one first? "A" or "B"?' }), QUESTION);
-  assert.equal(reactionFor({ ok: true, outcome: null, text: 'Done. Sent to Sebastian.' }), DONE);
+  assert.equal(reactionFor({ ok: true, outcome: null, text: 'Done. Sent to Dana.' }), DONE);
   assert.equal(reactionFor({ ok: true, outcome: null, text: '' }), DONE);
 });
 
