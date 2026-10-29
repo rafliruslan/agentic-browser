@@ -1,9 +1,13 @@
 /**
  * Which model runs a turn.
  *
- * Sonnet 5 at xhigh handles the ordinary case: read a page, post a message,
- * check Linear, answer a question. Opus 5 at xhigh is reserved for work that is
- * genuinely visual or genuinely deep, where the cost difference buys something.
+ * Sonnet 5 handles the ordinary case: read a page, post a message, check
+ * Linear, answer a question. Opus 5 is reserved for work that is genuinely
+ * visual or genuinely deep, where the cost difference buys something.
+ *
+ * Every turn runs at `high` effort, whichever model. Measured 2026-10-29 on a
+ * yes/no turn: `xhigh` took 8 to 9 s to the first reply, almost all thinking;
+ * `high`, `medium` and `low` took 3 to 5 s. Effort, not the model, was the cost.
  *
  * Both `--model` and `--effort` are per-invocation, so a thread that starts on
  * Sonnet can escalate for one turn and drop back. The session carries the
@@ -16,7 +20,7 @@
 
 export const DEFAULT_MODEL = 'sonnet';
 export const DEEP_MODEL = 'opus';
-export const EFFORT = 'xhigh';
+export const EFFORT = 'high';
 
 /**
  * Explicit override, checked first: the user can force either model by opening the

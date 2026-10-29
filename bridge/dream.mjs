@@ -309,7 +309,7 @@ async function main() {
     '--model',
     'opus',
     '--effort',
-    'xhigh',
+    'high',
     '--permission-mode',
     'acceptEdits',
     '--allowedTools',

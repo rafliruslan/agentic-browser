@@ -358,7 +358,7 @@ async function main() {
       isNew: true,
       cwd: WORKSPACE,
       model: meta.model || 'sonnet',
-      effort: meta.effort || 'xhigh',
+      effort: meta.effort || 'high',
       mcpConfig: MCP_CONFIG,
       allowedTools: grant.allowed,
       deniedTools: grant.denied,
