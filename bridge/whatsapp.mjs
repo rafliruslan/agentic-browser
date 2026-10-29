@@ -160,7 +160,8 @@ export function parsePre(pre) {
 export function parseMessages(raw) {
   return (raw ?? [])
     .map((m) => ({
-      ...parsePre(m.pre),
+      // A captioned file has no stamp: its label and time come straight from the page.
+      ...(m.pre ? parsePre(m.pre) : { sender: String(m.label ?? '').trim(), at: m.ts > 0 ? new Date(m.ts) : null }),
       text: String(m.text ?? '').trim(),
       id: String(m.id ?? ''),
       mentionsSelf: m.mentionsSelf === true,
@@ -265,10 +266,21 @@ const FETCHED_MEDIA = new Set(['image', 'document']);
 const NAMED_MEDIA = { video: 'a video', ptt: 'a voice note', audio: 'an audio file' };
 /** The documents the agent can read: what the bridge sends, minus nothing. */
 const READABLE_DOC = /\.(pdf|txt|csv|docx|xlsx|pptx)$/i;
-export const MAX_MEDIA = 4;
+export const MAX_MEDIA = 30;
 export const MAX_MEDIA_BYTES = 30 * 1024 * 1024;
+/** All the files of one ask together: each crosses the browser as base64, so the batch has to stay small. */
+export const MAX_MEDIA_TOTAL_BYTES = 150 * 1024 * 1024;
+/** Files copied off the page per browser call, so one slow file cannot cost the others. */
+export const MEDIA_BATCH = 8;
 
-/** Raw media rows from `readJs` -> `{id, idx, type, mime, size, name, fromMe, author}`; stickers dropped. */
+/** A long file name cut to 80 characters, keeping its extension: the extension decides if the file is readable. */
+function shortName(name, max = 80) {
+  if (name.length <= max) return name;
+  const ext = (name.match(/\.[A-Za-z0-9]{1,5}$/) || [''])[0];
+  return name.slice(0, max - ext.length) + ext;
+}
+
+/** Raw media rows from `readJs` ->`{id, idx, type, mime, size, name, fromMe, author}`; stickers dropped. */
 export function parseMedia(raw) {
   return (raw ?? [])
     .map((x) => ({
@@ -277,7 +289,7 @@ export function parseMedia(raw) {
       type: String(x?.type ?? ''),
       mime: String(x?.mime ?? ''),
       size: Number.isFinite(x?.size) ? x.size : 0,
-      name: String(x?.name ?? '').replace(/[\u0000-\u001f"]+/g, ' ').trim().slice(0, 80),
+      name: shortName(String(x?.name ?? '').replace(/[\u0000-\u001f"]+/g, ' ').trim()),
       fromMe: x?.fromMe === true,
       author: String(x?.author ?? ''),
     }))
@@ -317,17 +329,19 @@ function withRequest(x, request, messages, media) {
  * documents under the size cap are fetched; the rest, and anything that cannot
  * be fetched, is only named so the agent can say it did not see it.
  */
-export function pickMedia({ messages, media, request, kind, selfName, max = MAX_MEDIA, maxBytes = MAX_MEDIA_BYTES }) {
+export function pickMedia({ messages, media, request, kind, selfName, max = MAX_MEDIA, maxBytes = MAX_MEDIA_BYTES, maxTotal = MAX_MEDIA_TOTAL_BYTES }) {
   // A photo the account sent with no caption is its own message too.
   const lastOwn = Math.max(-1, ...messages.filter((m) => m.sender === selfName).map((m) => m.idx), ...media.filter((x) => x.fromMe).map((x) => x.idx));
   const theirs = media.filter((x) => x.idx > lastOwn && !x.fromMe && (kind === 'dm' || withRequest(x, request, messages, media)));
   const fetch = [];
   const named = [];
+  let total = 0;
   for (const x of [...theirs].reverse()) {
     if (!FETCHED_MEDIA.has(x.type) || (x.type === 'document' && !READABLE_DOC.test(x.name))) named.push({ ...x, why: 'unsupported' });
     else if (x.size > maxBytes) named.push({ ...x, why: 'too big' });
     else if (fetch.length >= max) named.push({ ...x, why: 'too many' });
-    else fetch.push(x);
+    else if (total + x.size > maxTotal) named.push({ ...x, why: 'too much' });
+    else { fetch.push(x); total += x.size; }
   }
   const byIdx = (a, b) => a.idx - b.idx;
   return { fetch: fetch.sort(byIdx), named: named.sort(byIdx) };
@@ -351,6 +365,7 @@ export function mediaLines({ fetch = [], named = [], files = [], from }) {
       unsupported: x.type === 'document' ? 'this kind of file cannot be opened here. Ask for a PDF, or for the text pasted in' : 'you cannot open these. Ask them to type out what matters',
       'too big': `it is over ${Math.round(MAX_MEDIA_BYTES / 1048576)} MB, so it was not fetched. Ask for a smaller one`,
       'too many': `only the newest ${MAX_MEDIA} are passed to you. Ask for the rest if you need them`,
+      'too much': `the files came to over ${Math.round(MAX_MEDIA_TOTAL_BYTES / 1048576)} MB together, so this one was not fetched. Ask for it on its own`,
     }[x.why];
     lines.push(`- ${label(x)} from ${from}: ${why}.`);
   }
@@ -557,6 +572,42 @@ const SENDER_FN = `(el) => {
   return { author: '', saved: '', pn: '' };
 }`;
 
+/** Does this message element tag the account? A chip carries the tagged id; `own` is the account's ids. */
+const MENTIONS_FN = `(el, own) => {
+  const chips = [...el.querySelectorAll('[data-app-text-template]')];
+  return chips.some((c) => {
+    const id = ((c.getAttribute('data-app-text-template') || '').replace(/[\\u200b-\\u200f\\u2060\\ufeff]/g, '').match(/^(\\d+)/) || [])[1];
+    return id && own.includes(id);
+  }) || [...el.querySelectorAll('[data-plain-text]')].some((c) => /^@(you|a1c\\/0spike official)$/i.test((c.getAttribute('data-plain-text') || '').trim()));
+}`;
+
+/**
+ * A photo or file with a caption, as a message. WhatsApp prints a captioned
+ * document with no `data-pre-plain-text` stamp, so the stamp query never sees
+ * it, and a tag in that caption looked like nothing at all. The caption, the
+ * sender and the time come from WhatsApp's record instead. The sender label is
+ * the one the same person's stamped messages carry (`labels`, by id), else the
+ * @username, the saved name or the ~push name. null for a row with no caption.
+ */
+const CAPTIONED_FN = `(row, idx, own, self, labels, sender, mentions) => {
+  const key = Object.keys(row).find((k) => k.startsWith('__reactFiber$'));
+  let f = key ? row[key] : null;
+  for (let i = 0; f && i < 40; i++, f = f.return) {
+    const msg = f.memoizedProps?.msg;
+    if (!msg || !msg.id) continue;
+    if (!msg.type || msg.type === 'chat') return null;
+    // A file sent with no caption still has msg.caption (its own name), so only the sender's own words count.
+    if (!msg.isCaptionByUser || !msg.caption) return null;
+    const shown = [...row.querySelectorAll('.copyable-text')].map((e) => (e.innerText || '').trim()).find(Boolean);
+    const who = sender(row);
+    const so = msg.senderObj || {};
+    const username = so.username || so.__x_username || '';
+    const label = msg.id.fromMe ? self : (labels[who.author] || (username ? '@' + username : '') || who.saved || (so.pushname ? '~' + so.pushname : ''));
+    return { pre: '', label, ts: (msg.t || 0) * 1000, text: shown || String(msg.caption), id: row.getAttribute('data-id') || '', idx, mentionsSelf: mentions(row, own), ...who };
+  }
+  return null;
+}`;
+
 /**
  * One chat row's photo or file, by WhatsApp's record: its type, size, name and
  * sender. null for a row that is plain text.
@@ -614,7 +665,7 @@ if (state !== 'ok') { out({ state }); } else {
  * person's id in `data-app-text-template`; the account's own ids are in
  * localStorage (`last-wid-md`, `WALid`). `own` replaces that lookup in tests.
  */
-export const readJs = (title, { own = null } = {}) => `${OPEN_JS}
+export const readJs = (title, { own = null, self = '' } = {}) => `${OPEN_JS}
 const TITLE = ${JSON.stringify(title)};
 const OWN_OVERRIDE = ${JSON.stringify(own)};
 if (state !== 'ok') { out({ state }); } else {
@@ -631,14 +682,18 @@ if (state !== 'ok') { out({ state }); } else {
       // list line inside a message is nested in it and carries a bare "- ".
       // Photos and files come from WhatsApp's own record of each row, since a
       // photo with no caption has no stamp. \`idx\` orders the two lists.
-      ({ messages, media } = await page.evaluate((own) => { const sender = ${SENDER_FN}; const media = ${MEDIA_FN}; const rows = [...document.querySelectorAll('#main [data-id]')]; return { media: rows.map(media).filter(Boolean), messages: [...document.querySelectorAll('#main [data-pre-plain-text^="["]')].slice(-30).map((m) => {
-        const chips = [...m.querySelectorAll('[data-app-text-template]')];
-        const mentionsSelf = chips.some((c) => {
-          const id = ((c.getAttribute('data-app-text-template') || '').replace(/[\\u200b-\\u200f\\u2060\\ufeff]/g, '').match(/^(\\d+)/) || [])[1];
-          return id && own.includes(id);
-        }) || [...m.querySelectorAll('[data-plain-text]')].some((c) => /^@(you|a1c\\/0spike official)$/i.test((c.getAttribute('data-plain-text') || '').trim()));
-        return { pre: m.getAttribute('data-pre-plain-text'), text: (m.innerText || '').trim(), id: m.closest('[data-id]')?.getAttribute('data-id') || '', idx: rows.indexOf(m.closest('[data-id]')), mentionsSelf, ...sender(m) };
-      }) }; }, own));
+      // A captioned file has no stamp: it is read from WhatsApp's record and put in chat order.
+      ({ messages, media } = await page.evaluate(([own, self]) => {
+        const sender = ${SENDER_FN}; const media = ${MEDIA_FN}; const mentions = ${MENTIONS_FN}; const captioned = ${CAPTIONED_FN};
+        const rows = [...document.querySelectorAll('#main [data-id]')];
+        const stamped = [...document.querySelectorAll('#main [data-pre-plain-text^="["]')].map((m) => ({ pre: m.getAttribute('data-pre-plain-text'), text: (m.innerText || '').trim(), id: m.closest('[data-id]')?.getAttribute('data-id') || '', idx: rows.indexOf(m.closest('[data-id]')), mentionsSelf: mentions(m, own), ...sender(m) }));
+        const have = new Set(stamped.map((s) => s.idx));
+        const labels = {};
+        for (const s of stamped) if (s.author) labels[s.author] = s.pre.replace(/^\\[[^\\]]*\\]\\s*/, '').replace(/:\\s*$/, '').trim();
+        const extra = rows.map((r, i) => (have.has(i) ? null : captioned(r, i, own, self, labels, sender, mentions))).filter(Boolean);
+        const all = extra.length ? [...stamped, ...extra].sort((a, b) => a.idx - b.idx) : stamped;
+        return { media: rows.map(media).filter(Boolean), messages: all.slice(-30) };
+      }, [own, ${JSON.stringify(self)}]));
       if (messages.length) break;
     }
     const header = ((await page.locator('#main header').first().innerText()) || '').split('\\n')[0].trim();
@@ -1434,22 +1489,31 @@ export async function tick({ force = {} } = {}) {
 async function fetchMedia({ read, messages, request, c, title, config, who }) {
   const picked = pickMedia({ messages, media: parseMedia(read.media), request, kind: c.kind, selfName: config.selfName });
   let files = [];
+  if (picked.named.length) log(`"${title}": only named: ${picked.named.map((x) => `${x.name || x.type} (${x.why})`).join('; ').slice(0, 400)}`);
   if (picked.fetch.length) try {
-    // Four files at the cap are about 160 MB of base64; a 30 MB one crosses in under 10 s.
-    const got = await runRepl(config.account, mediaJs(title, picked.fetch.map((x) => ({ id: x.id, type: x.type, size: x.size }))), { timeoutMs: 300_000 });
-    if (got.state !== 'ok' || got.header !== title || got.chatId !== read.chatId) {
-      const why = got.state !== 'ok' ? got.state : 'the chat changed';
-      log(`"${title}": files not fetched: ${why} ${got.error ?? ''}`);
-      files = picked.fetch.map(() => ({ error: 'the bridge could not reach it' }));
-    } else {
-      const byId = new Map((got.files || []).map((f) => [f.id, f]));
-      // Type and name come from WhatsApp's record, read earlier; only the bytes from this fetch.
-      files = await saveMedia(picked.fetch.map((x) => {
-        const f = byId.get(x.id);
-        return f ? { id: x.id, type: x.type, name: x.name, error: f.error, mime: f.mime, data: f.data } : { id: x.id, error: 'it was not returned' };
-      }));
+    // A 30 MB file crosses in under 10 s and a document takes a few seconds to open, so the
+    // files go over in batches: a call that dies costs its own files, not all of them.
+    const byId = new Map();
+    let broke = '';
+    for (let i = 0; i < picked.fetch.length && !broke; i += MEDIA_BATCH) {
+      const batch = picked.fetch.slice(i, i + MEDIA_BATCH);
+      const got = await runRepl(config.account, mediaJs(title, batch.map((x) => ({ id: x.id, type: x.type, size: x.size }))), { timeoutMs: 300_000 });
+      if (got.state !== 'ok' || got.header !== title || got.chatId !== read.chatId) {
+        broke = got.state !== 'ok' ? got.state : 'the chat changed';
+        log(`"${title}": files not fetched from #${i + 1} on: ${broke} ${got.error ?? ''}`);
+      } else {
+        for (const f of got.files || []) byId.set(f.id, f);
+      }
     }
+    // Type and name come from WhatsApp's record, read earlier; only the bytes from this fetch.
+    files = await saveMedia(picked.fetch.map((x) => {
+      const f = byId.get(x.id);
+      if (f) return { id: x.id, type: x.type, name: x.name, error: f.error, mime: f.mime, data: f.data };
+      return { id: x.id, error: broke ? 'the bridge could not reach it' : 'it was not returned' };
+    }));
     log(`"${title}": ${files.filter((f) => f.path).length}/${picked.fetch.length} file(s) saved`);
+    const failed = files.filter((f) => !f.path).map((f) => f.error).filter(Boolean);
+    if (failed.length) log(`"${title}": not saved: ${failed.join('; ').slice(0, 300)}`);
   } catch (e) {
     log(`"${title}": files not saved: ${e.message}`);
     files = picked.fetch.map(() => ({ error: 'the bridge hit an error saving it' }));
@@ -1464,7 +1528,7 @@ async function handle({ c, config, state, env, late = new Set(), depth = 0 }) {
     state.chats[title] = { ...state.chats[title], sig, at: new Date().toISOString(), ...extra };
   };
 
-  const read = await runRepl(config.account, readJs(title));
+  const read = await runRepl(config.account, readJs(title, { self: config.selfName }));
   if (read.state !== 'ok') return log(`read "${title}":`, read.state, read.error ?? '');
   if (read.header !== title) {
     log(`read "${title}": header was "${read.header}", skipping`);
@@ -1545,7 +1609,7 @@ async function handle({ c, config, state, env, late = new Set(), depth = 0 }) {
   // has no badge, and the reply now sits under it. Look again, once or twice.
   const recheck = async () => {
     if (depth >= 2) return;
-    const again = await runRepl(config.account, readJs(title));
+    const again = await runRepl(config.account, readJs(title, { self: config.selfName }));
     if (again.state !== 'ok' || again.header !== title) return log(`"${title}": recheck failed:`, again.state);
     const fresh = lateArrivals(messages, parseMessages(again.messages), config.selfName);
     if (!fresh.size) return;

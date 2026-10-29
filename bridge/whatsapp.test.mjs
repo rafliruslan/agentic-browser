@@ -5,7 +5,7 @@ import {
   unansweredTail, isGenuineDm, provenSender, unprovenAsks, qualifying, isFresh, tailHash, underBudget, toWhatsApp,
   buildPrompt, runRepl, SCAN_JS, readJs, sendJs, reactJs, candidateFor, REACTIONS, OPERATOR, TEAM, isNoReply,
   composerSteps, normComposer, extractAttachments, attachmentKind, vetAttachment, serveFiles, sendFilesJs, deliverReply, sessionsDirFor, turnEnvFor,
-  MAX_ATTACHMENTS, lateArrivals, withLate, parseMedia, pickMedia, mediaLines, mediaJs, saveMedia, MAX_MEDIA, MAX_MEDIA_BYTES,
+  MAX_ATTACHMENTS, lateArrivals, withLate, parseMedia, pickMedia, mediaLines, mediaJs, saveMedia, MAX_MEDIA, MAX_MEDIA_BYTES, MAX_MEDIA_TOTAL_BYTES, MEDIA_BATCH,
 } from './whatsapp.mjs';
 import { EventEmitter } from 'node:events';
 import vm from 'node:vm';
@@ -652,6 +652,7 @@ test('generated browser scripts are valid JavaScript', async () => {
   assert.doesNotThrow(() => wrap(SCAN_JS));
   assert.doesNotThrow(() => wrap(readJs('A "quoted" \\ title')));
   assert.doesNotThrow(() => wrap(readJs('T', { own: ['123'] })));
+  assert.doesNotThrow(() => wrap(readJs('T', { own: ['123'], self: 'A "b" `c` ${d}' })));
   assert.doesNotThrow(() => wrap(reactJs('T "q"', 'ID"1', '✅', 'check mark')));
   assert.doesNotThrow(() => wrap(mediaJs('T "q"', [{ id: 'ID"1', type: 'image', size: 1 }, { id: '`x` ${y}', type: 'document', size: 0 }])));
   assert.doesNotThrow(() => wrap(sendJs('T', ['line one\nline two', '`tick` ${no}'], SELF)));
@@ -783,8 +784,8 @@ test('pickMedia in a group takes only what came with the request', () => {
 
 test('pickMedia fetches the newest photos under the cap and only names the rest', () => {
   const media = [photo(1), photo(2), photo(3, { size: MAX_MEDIA_BYTES + 1 }), photo(4, { type: 'ptt' }), photo(5, { type: 'document', name: 'old.doc' }), ...[6, 7].map((i) => photo(i)), photo(8, { type: 'document', name: 'deal.PDF' }), photo(9)];
-  const { fetch, named } = pickMedia({ messages: [], media, request: [], kind: 'dm', selfName: SELF });
-  assert.equal(fetch.length, MAX_MEDIA);
+  const { fetch, named } = pickMedia({ messages: [], media, request: [], kind: 'dm', selfName: SELF, max: 4 });
+  assert.equal(fetch.length, 4);
   assert.deepEqual(fetch.map((x) => x.idx), [6, 7, 8, 9]);
   assert.deepEqual(named.map((x) => [x.idx, x.why]), [[1, 'too many'], [2, 'too many'], [3, 'too big'], [4, 'unsupported'], [5, 'unsupported']]);
 });
@@ -871,4 +872,67 @@ test('a message that came in during a run is found, and joins the tail under the
   const later = [...after, { ...m('Dana Hart', 'and this'), id: 'd' }];
   assert.deepEqual(withLate(later, unansweredTail(later, SELF), late).map((x) => x.id), ['b', 'd']);
   assert.deepEqual(withLate(later, unansweredTail(later, SELF), new Set()).map((x) => x.id), ['d']);
+});
+
+test('parseMessages reads a captioned file with no stamp from the label and time the page gives', () => {
+  const [a] = parseMessages([{ pre: '', label: '@Dana', ts: Date.UTC(2026, 7, 8, 7, 35), text: '@Official Account meeting notes', id: 'x', idx: 26, mentionsSelf: true, author: '111@lid' }]);
+  assert.equal(a.sender, '@Dana');
+  assert.equal(a.at.toISOString(), '2026-08-08T07:35:00.000Z');
+  assert.equal(a.mentionsSelf, true);
+  assert.equal(a.idx, 26);
+  // No stamp and no label: no sender, so it cannot qualify as anyone's request.
+  assert.equal(parseMessages([{ text: 'x' }])[0].sender, '');
+});
+
+test('a tag in a captioned file after the last reply is a request, not "already answered"', () => {
+  const messages = parseMessages([
+    { pre: `[3:33 PM, 08/08/2026] ${SELF}: `, text: 'got it', idx: 3 },
+    { pre: '', label: 'Dana Hart', ts: Date.now(), text: '@Official Account meeting notes', idx: 4, mentionsSelf: true, saved: 'Dana Hart' },
+  ]);
+  const tail = unansweredTail(messages, SELF);
+  assert.equal(tail.length, 1);
+  const q = qualifying({ tail, kind: 'group', group: config.groups.get('Ops Chat'), config });
+  assert.equal(q.person.name, 'Dana');
+});
+
+test('readJs reads a captioned file as a message and labels the account\'s own', () => {
+  const read = readJs('T', { self: SELF });
+  assert.ok(read.includes('msg.caption'));
+  // A file with no caption still carries its own name as `caption`; only isCaptionByUser tells them apart.
+  assert.ok(read.includes('isCaptionByUser'));
+  assert.ok(read.includes(JSON.stringify(SELF)));
+  assert.ok(read.includes("idx: rows.indexOf("));
+});
+
+test('a long file name keeps its extension, so a PDF stays readable', () => {
+  const long = 'Annual Summary of Supplier Pricing and Delivery Terms for All Regional Distribution Partners.pdf';
+  assert.ok(long.length > 80);
+  const [x] = parseMedia([{ ...photo(1), type: 'document', name: long }]);
+  assert.ok(x.name.length <= 80);
+  assert.match(x.name, /\.pdf$/);
+  const { fetch, named } = pickMedia({ messages: [], media: [x], request: [], kind: 'dm', selfName: SELF });
+  assert.deepEqual(fetch.map((f) => f.idx), [1]);
+  assert.deepEqual(named, []);
+});
+
+test('the default cap takes a whole batch of 25 documents, newest first, and names the rest', () => {
+  assert.equal(MAX_MEDIA, 30);
+  assert.ok(MEDIA_BATCH < MAX_MEDIA);
+  const docs = (n) => Array.from({ length: n }, (_, i) => photo(i + 1, { type: 'document', name: `f${i}.pdf`, size: 100_000 }));
+  const all = pickMedia({ messages: [], media: docs(25), request: [], kind: 'dm', selfName: SELF });
+  assert.equal(all.fetch.length, 25);
+  assert.deepEqual(all.named, []);
+  const over = pickMedia({ messages: [], media: docs(33), request: [], kind: 'dm', selfName: SELF });
+  assert.equal(over.fetch.length, MAX_MEDIA);
+  assert.deepEqual(over.named.map((x) => [x.idx, x.why]), [[1, 'too many'], [2, 'too many'], [3, 'too many']]);
+});
+
+test('the files of one ask are held to a total size, newest first', () => {
+  const big = (i) => photo(i, { type: 'document', name: `f${i}.pdf`, size: MAX_MEDIA_BYTES });
+  const { fetch, named } = pickMedia({ messages: [], media: [big(1), big(2), big(3), big(4), big(5), big(6), photo(7, { type: 'document', name: 'small.pdf', size: 1000 })], request: [], kind: 'dm', selfName: SELF });
+  // 150 MB total: the small newest file and four 30 MB ones fit; the fifth 30 MB one would cross the line.
+  assert.deepEqual(fetch.map((x) => x.idx), [3, 4, 5, 6, 7]);
+  assert.ok(fetch.reduce((n, x) => n + x.size, 0) <= MAX_MEDIA_TOTAL_BYTES);
+  assert.deepEqual(named.map((x) => [x.idx, x.why]), [[1, 'too much'], [2, 'too much']]);
+  assert.match(mediaLines({ named: named.slice(0, 1), from: 'Dana' })[0], /together, so this one was not fetched/);
 });
