@@ -671,7 +671,7 @@ async function main() {
           ...(blocks ? { blocks } : {}),
         });
         ok = !/^(❌|⏱|🌐|⚠️)/.test(body);
-        reaction = reactionFor({ ok, outcome, text: body });
+        reaction = reactionFor({ ok, outcome, text: body, timedOut: Boolean(result.timedOut) });
         // Follow the thread so the next turn needs no mention.
         // Only worth recording when a follow-up could act on it. Under
         // mention-only nothing reads the store, so writing it every reply just

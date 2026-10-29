@@ -24,7 +24,7 @@ export const DONE = 'white_check_mark';
 export const PARTIAL = 'warning';
 /** Replied, and is waiting for an answer before it can go on. */
 export const QUESTION = 'question';
-/** Failed, blocked or timed out: the request is not done. */
+/** Failed or blocked: the request is not done. A timeout is PARTIAL instead. */
 export const FAILED = 'x';
 
 /** Slack shortcode names, no colons. Kept together so tests can assert them. */
@@ -60,8 +60,13 @@ export function splitOutcome(text) {
  * agent's word can only make that worse, never better: a run that failed is
  * never shown as done. With no status line, a reply whose last line is a
  * question is taken as waiting for an answer, and anything else as done.
+ *
+ * `timedOut` is a run the bridge killed at its limit. The steps it finished
+ * stay done and the session can resume, and the reply says so, so it shows as
+ * partial rather than failed.
  */
-export function reactionFor({ ok, outcome, text } = {}) {
+export function reactionFor({ ok, outcome, text, timedOut } = {}) {
+  if (timedOut) return PARTIAL;
   if (!ok) return FAILED;
   if (outcome === 'blocked') return FAILED;
   if (outcome === 'partial') return PARTIAL;

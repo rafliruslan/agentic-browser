@@ -59,6 +59,12 @@ test('reactionFor never shows a failed run as done', () => {
   assert.equal(reactionFor({ ok: false, outcome: null, text: '' }), FAILED);
 });
 
+test('reactionFor shows a timeout as partial, never done or failed', () => {
+  // The reply says some steps may be done, so a cross would contradict it.
+  assert.equal(reactionFor({ ok: false, outcome: null, text: '⏱ That ran past the limit', timedOut: true }), PARTIAL);
+  assert.equal(reactionFor({ ok: false, outcome: 'done', text: 'x', timedOut: true }), PARTIAL);
+});
+
 test('reactionFor follows what the agent said about the request', () => {
   assert.equal(reactionFor({ ok: true, outcome: 'done', text: 'x' }), DONE);
   assert.equal(reactionFor({ ok: true, outcome: 'partial', text: 'x' }), PARTIAL);
