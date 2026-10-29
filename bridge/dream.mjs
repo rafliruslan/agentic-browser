@@ -26,6 +26,7 @@ import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { observe, render as renderBrowsing } from './observe.mjs';
+import { asideDigest } from './aside-memory.mjs';
 
 /**
  * Claude Code stores a session transcript under ~/.claude/projects/<encoded>,
@@ -226,6 +227,24 @@ What NOT to write:
 - Secrets. No passwords, tokens or codes, ever, whatever appeared in a transcript.
 - Anything about a person other than the user unless it changes how you should act.
 
+Where it lives, one home for each fact. \`memory/README.md\` has the full table.
+Aside keeps a memory of its own and shows it below under WHAT ASIDE ALREADY HOLDS.
+
+- **Company facts** (A1C, Sally, 0spike, work people, ongoing work, recurring jobs,
+  ideas that outlive a tool) go in \`memory/companies/\`, \`concepts/\`, \`projects/\`
+  or \`routines/\`. Tara, the second agent, reads those live, so that is how she
+  learns them. Put nothing personal about the user in them.
+- **How the user works and what he expects** goes in \`memory/users/\`. Tara does
+  not read it.
+- **Aside's memory is read only.** You were never given its path and must not
+  look for it. If Aside already holds a fact, do not write it again. At most add
+  a one-line pointer to its path. Record only what Aside lacks, which is what
+  happened through Slack and this bridge.
+- **If this tree and Aside disagree**, do not pick one quietly. Say so in your
+  summary and leave both as they are.
+- **Do not touch Tara's workspace.** She promotes her own notes.
+- Never write an em dash or the folded-hands emoji, in any file.
+
 How to write it:
 
 - **Merge, do not append.** If a file already covers the topic, edit that section.
@@ -285,9 +304,12 @@ async function main() {
     console.log(`[dream] browser history unavailable: ${e.message}`);
   }
 
+  const aside = await asideDigest();
+
   const input = [
     PROMPT,
     browsing ? `=== HOW THEY USED THE BROWSER ===\n${browsing}` : '',
+    aside ? `=== WHAT ASIDE ALREADY HOLDS (read only, do not copy) ===\n${aside}` : '',
     `=== CONVERSATIONS ===\n${parts.join('\n\n')}`,
   ]
     .filter(Boolean)
