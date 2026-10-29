@@ -82,9 +82,34 @@ export function createSessionStore({ path, now = () => Date.now(), maxAgeMs = WE
 
     async set(threadTs, sessionId) {
       const data = await load();
-      data[threadTs] = { sessionId, gen: data[threadTs]?.gen || 0, updatedAt: now() };
+      const prev = data[threadTs];
+      // The size belongs to a session. A different id starts from nothing.
+      const tokens = prev?.sessionId === sessionId ? prev.tokens || 0 : 0;
+      data[threadTs] = { sessionId, gen: prev?.gen || 0, updatedAt: now(), tokens };
       cache = data;
       await persist(data);
+    },
+
+    /**
+     * How many tokens the thread's session held on its last call, or 0 when
+     * unknown. A long session makes every step slower, so the bridge starts a
+     * fresh one past a limit. See `MAX_SESSION_TOKENS` in index.mjs.
+     */
+    async tokens(threadTs) {
+      const data = await load();
+      const entry = data[threadTs];
+      return entry?.sessionId ? entry.tokens || 0 : 0;
+    },
+
+    /** Record the session's size after a run. Leaves the age alone: a run that only measured is not activity. */
+    async noteTokens(threadTs, tokens) {
+      const data = await load();
+      const entry = data[threadTs];
+      if (!entry?.sessionId || !Number.isFinite(tokens) || tokens <= 0) return false;
+      entry.tokens = tokens;
+      cache = data;
+      await persist(data);
+      return true;
     },
 
     /**

@@ -119,6 +119,20 @@ const MENTION_ONLY = process.env.AGENT_MENTION_ONLY !== '0';
 const DEFAULT_CONCURRENCY = 3;
 
 /**
+ * A chat's whole session is read again on every model call, so a long one slows
+ * every step: one direct message went from 53K to 480K tokens in an afternoon,
+ * and a trivial reply took 6 to 8 seconds. Past this size the next turn starts a
+ * fresh session. A DM keeps its last messages (more of them just after the
+ * restart) and the agent can search memory for the rest. `MAX_SESSION_TOKENS` in
+ * the env overrides it, and 0 turns it off.
+ */
+const DEFAULT_MAX_SESSION_TOKENS = 150_000;
+const ROTATED_DM_LIMIT = 25;
+const ROTATED_NOTE =
+  'This chat ran long, so its earlier turns were cleared to keep you fast. The recent messages above are all you remember of it. ' +
+  'Before you say you do not know something we may have covered, search memory.';
+
+/**
  * Channels the agent will answer in. `*` means any channel it has been invited
  * to, which is already gated by Slack: it only receives `app_mention` from
  * channels someone added her to. A comma-separated list narrows it further.
@@ -200,6 +214,9 @@ async function main() {
   const concurrency = Number.parseInt(MAX_CONCURRENT, 10) > 0
     ? Number.parseInt(MAX_CONCURRENT, 10)
     : DEFAULT_CONCURRENCY;
+  const maxSessionTokens = /^\d+$/.test(env.MAX_SESSION_TOKENS ?? '')
+    ? Number.parseInt(env.MAX_SESSION_TOKENS, 10)
+    : DEFAULT_MAX_SESSION_TOKENS;
 
   if (!SLACK_BOT_TOKEN || !SLACK_APP_TOKEN) {
     throw new Error(`SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set in ${ENV_PATH}`);
@@ -500,18 +517,31 @@ async function main() {
           // messages in the thread read as theirs and the operator's as someone else's.
           allowedUser: role === TEAM ? event.user : ALLOWED_USER,
         };
+        // Looked up before the context is fetched: a session that has grown too
+        // long is dropped here, and a DM then gets more of its recent messages.
+        let existing = await sessions.get(sessionKey);
+        let rotated = false;
+        if (existing && maxSessionTokens > 0) {
+          const size = await sessions.tokens(sessionKey);
+          if (size > maxSessionTokens) {
+            console.log(`[agent] ${sessionKey} holds ${size} tokens, over ${maxSessionTokens}: starting a fresh session`);
+            await sessions.forget(sessionKey);
+            existing = null;
+            rotated = true;
+          }
+        }
+
         const threadContext = flat
-          ? await fetchDmContext(client, contextArgs)
+          ? await fetchDmContext(client, { ...contextArgs, ...(rotated ? { limit: ROTATED_DM_LIMIT } : {}) })
           : await fetchThreadContext(client, { ...contextArgs, threadTs });
 
-        const existing = await sessions.get(sessionKey);
         const sessionId = existing || (await sessions.idFor(sessionKey));
         const isNew = !existing;
 
         const task = composeTask(prompt, threadContext);
         // Who she is browsing as, before what she is being asked. An empty
         // string when unknown, so nothing is claimed that is not known.
-        const note = [roleNote(role, event.user), identityNote(IDENTITY), (flat ? dmLocationNote({ channel }) : locationNote({ channel, threadTs })), late ? lateNote(event.ts) : '', REPLY_NOTE]
+        const note = [roleNote(role, event.user), identityNote(IDENTITY), (flat ? dmLocationNote({ channel }) : locationNote({ channel, threadTs })), late ? lateNote(event.ts) : '', rotated ? ROTATED_NOTE : '', REPLY_NOTE]
           .filter(Boolean)
           .join('\n\n');
         // Persona on a thread's first turn only. After that it lives in the
@@ -611,6 +641,8 @@ async function main() {
         } else if (result.ok) {
           await sessions.set(sessionKey, result.sessionId || sessionId);
         }
+        // How big the session is now, for the size check at the top of the next turn.
+        if (result.contextTokens) await sessions.noteTokens(sessionKey, result.contextTokens);
 
         if (result.denials?.length) {
           console.log(`[agent] ${result.denials.length} permission denial(s) in ${convKey}`);

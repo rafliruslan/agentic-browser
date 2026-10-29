@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildArgs, runAgent } from './runner.mjs';
+import { buildArgs, runAgent, contextTokensOf } from './runner.mjs';
 
 const base = { prompt: 'hi', sessionId: 'abc', isNew: true };
 
@@ -155,4 +155,22 @@ test('every run carries the fence hook', () => {
   const hook = settings.hooks.PostToolUse[0];
   assert.equal(hook.matcher, 'mcp__.*');
   assert.match(hook.hooks[0].command, /fence-hook\.mjs"$/);
+});
+
+const call = (u) => ({ type: 'assistant', message: { usage: u } });
+
+test('contextTokensOf is the size of the last call, not a total across calls', () => {
+  const objects = [
+    call({ input_tokens: 10, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 500 }),
+    { type: 'user', message: {} },
+    call({ input_tokens: 5, cache_read_input_tokens: 120_000, cache_creation_input_tokens: 1_000 }),
+    { type: 'result', usage: { input_tokens: 999_999 } },
+  ];
+  assert.equal(contextTokensOf(objects), 121_005);
+});
+
+test('contextTokensOf is null when the stream has no usage', () => {
+  assert.equal(contextTokensOf([]), null);
+  assert.equal(contextTokensOf(undefined), null);
+  assert.equal(contextTokensOf([{ type: 'assistant', message: {} }, { type: 'result' }]), null);
 });

@@ -30,6 +30,24 @@ import { appendRun, indexPathFor } from './runs-index.mjs';
 import { fileURLToPath } from 'node:url';
 import { fenceSettings } from './fence.mjs';
 
+/**
+ * How much the model had to read on the run's last call: the tokens of the whole
+ * conversation so far. Every call re-reads it, so this is what makes a long
+ * chat slow. Taken from the last assistant event's usage; the result line
+ * only has totals across all the calls, which says nothing about the size.
+ * Null when the stream carried no usage.
+ */
+export function contextTokensOf(objects) {
+  for (let i = (objects?.length ?? 0) - 1; i >= 0; i--) {
+    const o = objects[i];
+    const u = o?.type === 'assistant' ? o.message?.usage : null;
+    if (!u) continue;
+    const n = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    if (n > 0) return n;
+  }
+  return null;
+}
+
 /** The hook that fences outside content. See fence.mjs. */
 const FENCE_HOOK = fileURLToPath(new URL('./fence-hook.mjs', import.meta.url));
 
@@ -278,6 +296,7 @@ export function runAgent({
         }
       }
       const combined = `${stdout}\n${stderr}`;
+      const contextTokens = contextTokensOf(objects);
 
       if (timedOut) {
         return resolve({
@@ -288,6 +307,7 @@ export function runAgent({
           denials: [],
           costUsd: null,
           timedOut: true,
+          contextTokens,
           raw: combined,
         });
       }
@@ -305,6 +325,7 @@ export function runAgent({
           denials: [],
           costUsd: null,
           timedOut: false,
+          contextTokens,
           raw: combined,
           range,
         });
@@ -325,6 +346,7 @@ export function runAgent({
         denials: parsed.permission_denials ?? [],
         costUsd: typeof parsed.total_cost_usd === 'number' ? parsed.total_cost_usd : null,
         timedOut: false,
+        contextTokens,
         raw: stdout,
         // Where this turn's bytes landed in our transcript. Null when no
         // transcript was asked for.
