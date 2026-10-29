@@ -24,11 +24,13 @@ export const DONE = 'white_check_mark';
 export const PARTIAL = 'warning';
 /** Replied, and is waiting for an answer before it can go on. */
 export const QUESTION = 'question';
-/** Failed or blocked: the request is not done. A timeout is PARTIAL instead. */
+/** Failed or blocked: the request is not done. */
 export const FAILED = 'x';
+/** Killed at the run limit. Matches the stopwatch that opens the reply. */
+export const TIMED_OUT = 'stopwatch';
 
 /** Slack shortcode names, no colons. Kept together so tests can assert them. */
-export const ALL = [WORKING, DONE, PARTIAL, QUESTION, FAILED];
+export const ALL = [WORKING, DONE, PARTIAL, QUESTION, FAILED, TIMED_OUT];
 
 /**
  * A reply used to get a green tick whenever it was posted, whatever it said, so
@@ -61,12 +63,11 @@ export function splitOutcome(text) {
  * never shown as done. With no status line, a reply whose last line is a
  * question is taken as waiting for an answer, and anything else as done.
  *
- * `timedOut` is a run the bridge killed at its limit. The steps it finished
- * stay done and the session can resume, and the reply says so, so it shows as
- * partial rather than failed.
+ * `timedOut` is a run the bridge killed at its limit. Its own marker, the same
+ * stopwatch the reply opens with, so it reads as neither done nor failed.
  */
 export function reactionFor({ ok, outcome, text, timedOut } = {}) {
-  if (timedOut) return PARTIAL;
+  if (timedOut) return TIMED_OUT;
   if (!ok) return FAILED;
   if (outcome === 'blocked') return FAILED;
   if (outcome === 'partial') return PARTIAL;

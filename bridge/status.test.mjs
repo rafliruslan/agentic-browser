@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { react, unreact, settle, setStatus, splitOutcome, reactionFor, WORKING, DONE, PARTIAL, QUESTION, FAILED, ALL } from './status.mjs';
+import { react, unreact, settle, setStatus, splitOutcome, reactionFor, WORKING, DONE, PARTIAL, QUESTION, FAILED, TIMED_OUT, ALL } from './status.mjs';
 import { REPLY_NOTE } from './persona.mjs';
 
 const slackErr = (code) => Object.assign(new Error(code), { data: { error: code } });
@@ -24,7 +24,7 @@ test('the markers are Slack shortcodes without colons', () => {
   for (const name of ALL) {
     assert.match(name, /^[a-z0-9_]+$/, `${name} must be a bare shortcode`);
   }
-  assert.deepEqual(ALL, [WORKING, DONE, PARTIAL, QUESTION, FAILED]);
+  assert.deepEqual(ALL, [WORKING, DONE, PARTIAL, QUESTION, FAILED, TIMED_OUT]);
   assert.equal(new Set(ALL).size, ALL.length, 'every marker must mean one thing');
 });
 
@@ -59,10 +59,11 @@ test('reactionFor never shows a failed run as done', () => {
   assert.equal(reactionFor({ ok: false, outcome: null, text: '' }), FAILED);
 });
 
-test('reactionFor shows a timeout as partial, never done or failed', () => {
+test('reactionFor gives a timeout its own stopwatch, never done or failed', () => {
   // The reply says some steps may be done, so a cross would contradict it.
-  assert.equal(reactionFor({ ok: false, outcome: null, text: '⏱ That ran past the limit', timedOut: true }), PARTIAL);
-  assert.equal(reactionFor({ ok: false, outcome: 'done', text: 'x', timedOut: true }), PARTIAL);
+  assert.equal(reactionFor({ ok: false, outcome: null, text: '⏱ That ran past the limit', timedOut: true }), TIMED_OUT);
+  assert.equal(reactionFor({ ok: false, outcome: 'done', text: 'x', timedOut: true }), TIMED_OUT);
+  assert.equal(TIMED_OUT, 'stopwatch');
 });
 
 test('reactionFor follows what the agent said about the request', () => {
