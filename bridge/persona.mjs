@@ -61,6 +61,24 @@ function load() {
 export const PERSONA = `${load()}\n---\n\n`;
 
 /**
+ * Two reply rules that go with EVERY turn, not just a thread's first. The
+ * persona is only sent once, so a rule left there never reaches a conversation
+ * that already exists, and a direct message is one conversation for good.
+ *
+ * - A yes or no question gets a yes or a no, not a paragraph.
+ * - The last line says how the request went. `status.mjs` strips it and turns
+ *   it into the reaction on the message, so a reply that says "I could not" is
+ *   no longer marked with a green tick.
+ *
+ * Neutral on purpose: both bridges send it, and each keeps its own voice.
+ */
+export const REPLY_NOTE =
+  'Reply rules for this turn. A yes or no question gets "Yes." or "No." first, then one short reason only if it changes what they do. ' +
+  'End the reply with one last line, alone: [status: done], [status: partial], [status: blocked] or [status: question]. ' +
+  'done means the request is fully done, partial means some of it is done, blocked means you could not do it, ' +
+  'question means you need their answer before you can go on. The bridge removes that line, so never mention it.';
+
+/**
  * Build the prompt actually handed to the agent.
  *
  * @param {string} prompt      what the user typed, verbatim

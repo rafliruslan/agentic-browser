@@ -15,7 +15,7 @@ import { join, dirname } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import bolt from '@slack/bolt';
 
-import { PERSONA } from './persona.mjs';
+import { PERSONA, REPLY_NOTE } from './persona.mjs';
 import { createSessionStore, DEFAULT_STATE_PATH } from './sessions.mjs';
 import { createPendingStore, DEFAULT_PENDING_PATH } from './pending.mjs';
 import { createQueue } from './queue.mjs';
@@ -30,7 +30,7 @@ import { readIdentity, identityNote } from './identity.mjs';
 import { healBrowser } from './browser-health.mjs';
 import { pickModel, stripDirective } from './router.mjs';
 import { acquire, release } from './lock.mjs';
-import { react, settle, setStatus, WORKING } from './status.mjs';
+import { react, settle, setStatus, splitOutcome, reactionFor, WORKING } from './status.mjs';
 import { createSubscriptionStore, shouldHandle, isStopPhrase, canInterrupt } from './subscriptions.mjs';
 import { allowedTools, browserCdpUrl, deniedBrowserTools, BASE_TOOLS } from './browser.mjs';
 import { parseInterrupt } from './interrupt.mjs';
@@ -473,6 +473,9 @@ async function main() {
 
     await queue.add(convKey, async () => {
       let ok = false;
+      // Which reaction the message ends up with. Null until a reply is posted,
+      // and then `settle` falls back to a tick or a cross from `ok`.
+      let reaction = null;
 
       try {
         // Recorded BEFORE the run, cleared after: that ordering is what makes
@@ -508,7 +511,7 @@ async function main() {
         const task = composeTask(prompt, threadContext);
         // Who she is browsing as, before what she is being asked. An empty
         // string when unknown, so nothing is claimed that is not known.
-        const note = [roleNote(role, event.user), identityNote(IDENTITY), (flat ? dmLocationNote({ channel }) : locationNote({ channel, threadTs })), late ? lateNote(event.ts) : '']
+        const note = [roleNote(role, event.user), identityNote(IDENTITY), (flat ? dmLocationNote({ channel }) : locationNote({ channel, threadTs })), late ? lateNote(event.ts) : '', REPLY_NOTE]
           .filter(Boolean)
           .join('\n\n');
         // Persona on a thread's first turn only. After that it lives in the
@@ -622,7 +625,11 @@ async function main() {
           return;
         }
 
-        const body = formatResult(toLegacyResult(result));
+        // The agent ends its reply with a status line. It picks the reaction and
+        // is never posted. A failed or timed-out run has no such line to trust.
+        const { text: said, outcome } =
+          result.ok && !result.timedOut ? splitOutcome(result.text) : { text: result.text, outcome: null };
+        const body = formatResult(toLegacyResult({ ...result, text: said }));
         const blocks = buildBlocks(body);
 
         await client.chat.postMessage({
@@ -632,6 +639,7 @@ async function main() {
           ...(blocks ? { blocks } : {}),
         });
         ok = !/^(❌|⏱|🌐|⚠️)/.test(body);
+        reaction = reactionFor({ ok, outcome, text: body });
         // Follow the thread so the next turn needs no mention.
         // Only worth recording when a follow-up could act on it. Under
         // mention-only nothing reads the store, so writing it every reply just
@@ -649,7 +657,7 @@ async function main() {
           // Nothing further to do; the finally below clears the record.
         }
       } finally {
-        await settle(client, { channel, ts: event.ts, ok, logger: console });
+        await settle(client, { channel, ts: event.ts, ok, name: reaction, logger: console });
         await setStatus(client, { channel, threadTs: replyAt.thread_ts, status: '', logger: console });
         await pendingStore.remove(channel, event.ts);
       }

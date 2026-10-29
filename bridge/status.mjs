@@ -18,13 +18,58 @@
 
 /** Picked up and working. */
 export const WORKING = 'eyes';
-/** Finished, answer posted. */
+/** Finished, and the request is done. */
 export const DONE = 'white_check_mark';
-/** Failed or timed out. */
+/** Replied, but only part of the request is done. */
+export const PARTIAL = 'warning';
+/** Replied, and is waiting for an answer before it can go on. */
+export const QUESTION = 'question';
+/** Failed, blocked or timed out: the request is not done. */
 export const FAILED = 'x';
 
 /** Slack shortcode names, no colons. Kept together so tests can assert them. */
-export const ALL = [WORKING, DONE, FAILED];
+export const ALL = [WORKING, DONE, PARTIAL, QUESTION, FAILED];
+
+/**
+ * A reply used to get a green tick whenever it was posted, whatever it said, so
+ * "I could not do that" and "which one first?" both read as done. The agent now
+ * ends its reply with a line saying how it went, and the bridge turns that into
+ * the reaction. The line is stripped before anything is posted.
+ */
+const STATUS_LINE = /\s*\[status:[ \t]*(done|partial|blocked|question)[ \t]*\][ \t]*$/i;
+const ANY_STATUS_LINE = /[ \t]*\[status:[ \t]*(?:done|partial|blocked|question)[ \t]*\]/gi;
+
+/**
+ * Take the status line off a reply.
+ * @returns {{ text: string, outcome: 'done'|'partial'|'blocked'|'question'|null }}
+ */
+export function splitOutcome(text) {
+  const s = String(text ?? '');
+  const m = s.match(STATUS_LINE);
+  // Anywhere else it is stripped too, so a line the agent put in the wrong place
+  // never reaches Slack. It just counts for nothing.
+  const clean = (t) => t.replace(ANY_STATUS_LINE, '').replace(/\n{3,}/g, '\n\n').trim();
+  if (!m) return { text: clean(s), outcome: null };
+  return { text: clean(s.slice(0, m.index)), outcome: m[1].toLowerCase() };
+}
+
+/**
+ * Pick the reaction for a posted reply.
+ *
+ * `ok` is the bridge's own verdict (the run did not fail or time out). The
+ * agent's word can only make that worse, never better: a run that failed is
+ * never shown as done. With no status line, a reply whose last line is a
+ * question is taken as waiting for an answer, and anything else as done.
+ */
+export function reactionFor({ ok, outcome, text } = {}) {
+  if (!ok) return FAILED;
+  if (outcome === 'blocked') return FAILED;
+  if (outcome === 'partial') return PARTIAL;
+  if (outcome === 'question') return QUESTION;
+  if (outcome === 'done') return DONE;
+  const last = String(text ?? '').trim().split('\n').pop().trim();
+  return /\?["')\]]*$/.test(last) ? QUESTION : DONE;
+}
 
 /**
  * Add a reaction, swallowing the errors that are not worth failing a run over.
@@ -62,9 +107,9 @@ export async function unreact(client, { channel, ts, name, logger } = {}) {
  * Move from the working marker to a final one, in that order: the old marker
  * goes first so the message is never briefly showing both.
  */
-export async function settle(client, { channel, ts, ok, logger } = {}) {
+export async function settle(client, { channel, ts, ok, name, logger } = {}) {
   await unreact(client, { channel, ts, name: WORKING, logger });
-  return react(client, { channel, ts, name: ok ? DONE : FAILED, logger });
+  return react(client, { channel, ts, name: name || (ok ? DONE : FAILED), logger });
 }
 
 /**
