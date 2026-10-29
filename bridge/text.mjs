@@ -189,10 +189,15 @@ export function toSlackText(text) {
  */
 export function formatResult(result) {
   if (result.timedOut) {
-    // Work may continue after the CLI is killed, so this is "not back yet"
-    // rather than "failed". The text below is whatever was said by then.
+    // The CLI was killed, so the run is over, but the steps it finished stay
+    // done and the session stays resumable. Say both, and say what to do next:
+    // the old text said it "may still be finishing" and gave no way forward.
+    // The text below is whatever was said by then, if anything.
     const partial = truncateOutput(toSlackText(result.output));
-    const head = '⏱ Ran past the time limit. It may still be finishing in the browser.';
+    const limit = result.timeoutMinutes ? `${result.timeoutMinutes} minute ` : '';
+    const head =
+      `⏱ That ran past the ${limit}limit, so I stopped it. Some steps may already be done, so check before repeating anything. ` +
+      'Ask me to continue and I will pick up from there, or split it into smaller asks.';
     return partial ? `${head}\n\n${partial}` : head;
   }
 

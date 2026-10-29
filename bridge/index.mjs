@@ -23,7 +23,7 @@ import { fetchThreadContext, fetchDmContext, composeTask, locationNote, dmLocati
 import { parseMention, formatResult } from './text.mjs';
 import { buildBlocks } from './blocks.mjs';
 import { spawn } from 'node:child_process';
-import { runAgent } from './runner.mjs';
+import { runAgent, DEFAULT_TIMEOUT_MS } from './runner.mjs';
 import { channelKind, createRoles, gateUserFor, opsPrivate, parseList, requesterEnv, roleNote, TEAM, TEAM_DENIED_TOOLS } from './roles.mjs';
 import { transcriptPathFor } from './mirror.mjs';
 import { readIdentity, identityNote } from './identity.mjs';
@@ -176,6 +176,12 @@ async function loadEnv(path = ENV_PATH) {
  * were each found in a live channel rather than by any test.
  */
 function toLegacyResult(r) {
+  // A timed-out run's `text` is the runner's canned line, not anything the agent
+  // said. Passed on as output it stacked a second, contradicting message under
+  // the first, so it is dropped here and formatResult says it once.
+  if (r.timedOut) {
+    return { ok: false, output: '', error: '', timedOut: true, timeoutMinutes: Math.round(DEFAULT_TIMEOUT_MS / 60000) };
+  }
   return {
     ok: r.ok,
     output: r.text,

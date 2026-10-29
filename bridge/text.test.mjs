@@ -94,15 +94,24 @@ test('formatResult returns output on success', () => {
 
 test('formatResult reports a timeout with whatever she had said', () => {
   const out = formatResult({ ok: false, output: 'partial', error: '', timedOut: true, sessionId: null });
-  assert.match(out, /past the time limit/);
-  assert.match(out, /still be finishing/);
+  assert.match(out, /^⏱ /);
+  assert.match(out, /ran past the limit, so I stopped it/);
   assert.match(out, /partial/);
 });
 
 test('formatResult omits the empty body when a timeout produced nothing', () => {
   const out = formatResult({ ok: false, output: '', error: '', timedOut: true, sessionId: null });
-  assert.match(out, /past the time limit/);
+  assert.match(out, /ran past the limit/);
   assert.ok(!out.includes('(no output)'));
+});
+
+test('formatResult names the limit and the way forward on a timeout', () => {
+  const out = formatResult({ ok: false, output: '', error: '', timedOut: true, timeoutMinutes: 15 });
+  assert.match(out, /ran past the 15 minute limit/);
+  assert.match(out, /Some steps may already be done/);
+  assert.match(out, /Ask me to continue/);
+  // The old text claimed it might still be running, which contradicted "stopped".
+  assert.ok(!/still be finishing/.test(out));
 });
 
 test('formatResult detects a browser that is not reachable', () => {
