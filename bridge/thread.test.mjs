@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatThread, composeTask, locationNote, describeFiles } from './thread.mjs';
+import { formatThread, composeTask, locationNote, describeFiles, TOOL_MESSAGE_CAP } from './thread.mjs';
 
 const BOT = 'UBOT';
 const OPERATOR = 'U01EXAMPLE1';
@@ -215,4 +215,12 @@ test('dmLocationNote names the channel and says no thread', async () => {
   const { dmLocationNote } = await import('./thread.mjs');
   assert.match(dmLocationNote({ channel: 'D1' }), /`D1`/);
   assert.equal(dmLocationNote({}), '');
+});
+
+test('formatThread keeps a long message whole when given the tool cap', () => {
+  const long = 'x'.repeat(3000);
+  const short = formatThread([msg(OPERATOR, long)], BOT, null, OPERATOR);
+  assert.match(short, /… \(truncated\)$/);
+  const whole = formatThread([msg(OPERATOR, long)], BOT, null, OPERATOR, TOOL_MESSAGE_CAP);
+  assert.equal(whole, `[the user] ${long}`);
 });

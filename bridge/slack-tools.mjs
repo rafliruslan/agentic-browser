@@ -17,7 +17,7 @@
  */
 import { chmod, lstat, mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join, sep } from 'node:path';
-import { formatThread, recentReplies } from './thread.mjs';
+import { TOOL_MESSAGE_CAP, formatThread, recentReplies } from './thread.mjs';
 import { toSlackText } from './text.mjs';
 import { buildBlocks } from './blocks.mjs';
 import { extractOfficeText, isLegacyOffice, officeKind } from './office-text.mjs';
@@ -365,7 +365,7 @@ export async function callTool(name, args = {}, ctx) {
           limit: Math.min(Math.max(Number(args.limit) || 50, 1), 200),
         });
         const people = [...new Set(messages.map((m) => m.user).filter(Boolean))];
-        const body = formatThread(messages, botUserId, null, allowedUser);
+        const body = formatThread(messages, botUserId, null, allowedUser, TOOL_MESSAGE_CAP);
         return text(`${body || '(no readable messages)'}\n\nparticipants: ${people.join(', ') || 'none'}`);
       }
       case 'history': {
@@ -375,7 +375,7 @@ export async function callTool(name, args = {}, ctx) {
         });
         // history is newest first; a transcript reads oldest first.
         const messages = [...(res.messages || [])].reverse();
-        return text(formatThread(messages, botUserId, null, allowedUser) || '(no readable messages)');
+        return text(formatThread(messages, botUserId, null, allowedUser, TOOL_MESSAGE_CAP) || '(no readable messages)');
       }
       case 'channel_info': {
         const { channel: c } = await client.conversations.info({ channel: args.channel });

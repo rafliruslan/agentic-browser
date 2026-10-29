@@ -20,6 +20,13 @@ export const THREAD_LIMIT = 30;
 export const MESSAGE_CAP = 600;
 
 /**
+ * Cap for the `thread` and `history` tools. The agent asked for these, so a
+ * long message is what it came for: at 600 a pasted blog list stopped midway
+ * and the agent judged only what it saw. Slack itself cuts a message at 40000.
+ */
+export const TOOL_MESSAGE_CAP = 8000;
+
+/**
  * Placeholders the bridge posts before a run finishes. Not conversation.
  *
  * Slack stores emoji as shortcodes, so a message posted as "⏳ running…" reads
@@ -66,7 +73,7 @@ export function describeFiles(files) {
  * @param {string} skipTs     ts of the triggering mention, which becomes the prompt
  * @param {string} allowedUser the only person whose words are instructions
  */
-export function formatThread(messages, botUserId, skipTs, allowedUser) {
+export function formatThread(messages, botUserId, skipTs, allowedUser, cap = MESSAGE_CAP) {
   const lines = [];
 
   for (const msg of messages || []) {
@@ -91,7 +98,7 @@ export function formatThread(messages, botUserId, skipTs, allowedUser) {
     if (!cleaned && !files) continue;
 
     const capped =
-      cleaned.length > MESSAGE_CAP ? `${cleaned.slice(0, MESSAGE_CAP)}… (truncated)` : cleaned;
+      cleaned.length > cap ? `${cleaned.slice(0, cap)}… (truncated)` : cleaned;
 
     // After the cap, so a long message cannot cut off the id the agent needs.
     lines.push(`[${speaker}] ${[capped, files].filter(Boolean).join('\n')}`);
